@@ -46,6 +46,8 @@ export default function LoginPage() {
         message = "This account has been disabled."
       } else if (err.code === "auth/too-many-requests") {
         message = "Too many login attempts. Please try again later."
+      } else if (err.code === "auth/invalid-credential") {
+        message = "Invalid email or password. Use an account from Firebase Console → Authentication → Users."
       }
       
       setError(message)
@@ -88,7 +90,6 @@ export default function LoginPage() {
               name="email"
               type="email"
               required
-              defaultValue="elena.hart@moodyhealth.io"
               placeholder="you@clinic.com"
               className="bg-card pl-9"
             />
@@ -109,7 +110,6 @@ export default function LoginPage() {
               name="password"
               type={showPassword ? "text" : "password"}
               required
-              defaultValue="password123"
               placeholder="Enter your password"
               className="bg-card px-9"
             />

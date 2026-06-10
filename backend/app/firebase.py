@@ -12,7 +12,10 @@ def get_firebase_app():
         if cred_path and os.path.exists(cred_path):
             cred = credentials.Certificate(cred_path)
             firebase_admin.initialize_app(cred, {
-                'storageBucket': 'pingmytherapist.firebasestorage.app'
+                'storageBucket': os.getenv(
+                    'FIREBASE_STORAGE_BUCKET',
+                    'pingmytherapist.firebasestorage.app',
+                )
             })
         else:
             # Check if we have env vars containing the JSON directly (good for deployment)
@@ -21,7 +24,10 @@ def get_firebase_app():
                 cred_dict = json.loads(creds_json)
                 cred = credentials.Certificate(cred_dict)
                 firebase_admin.initialize_app(cred, {
-                    'storageBucket': 'pingmytherapist.firebasestorage.app'
+                    'storageBucket': os.getenv(
+                        'FIREBASE_STORAGE_BUCKET',
+                        'pingmytherapist.firebasestorage.app',
+                    )
                 })
             else:
                 print("WARNING: No Firebase Admin credentials found. Backend running without Firebase.")

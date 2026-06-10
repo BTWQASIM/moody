@@ -13,3 +13,7 @@ __v0_jsx-dev-runtime.ts
 node_modules
 .next/
 .DS_Store
+
+# Firebase Admin service account (never commit)
+backend/firebase-adminsdk.json
+**/firebase-adminsdk*.json

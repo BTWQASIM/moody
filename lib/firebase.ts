@@ -14,11 +14,17 @@ const firebaseConfig = {
   measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
 };
 
-// Validate Firebase configuration
-if (!firebaseConfig.apiKey || !firebaseConfig.authDomain || !firebaseConfig.projectId) {
-  console.error("Firebase configuration is incomplete. Check your environment variables:");
-  console.error("Required: NEXT_PUBLIC_FIREBASE_API_KEY, NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN, NEXT_PUBLIC_FIREBASE_PROJECT_ID");
-  throw new Error("Firebase configuration not found. Please set environment variables.");
+const requiredKeys = ["apiKey", "authDomain", "projectId", "storageBucket", "messagingSenderId", "appId"] as const;
+const missingKeys = requiredKeys.filter((key) => !firebaseConfig[key]);
+
+if (missingKeys.length > 0) {
+  const envNames = missingKeys.map(
+    (key) =>
+      `NEXT_PUBLIC_FIREBASE_${key.replace(/([A-Z])/g, "_$1").toUpperCase()}`
+  );
+  throw new Error(
+    `Firebase configuration incomplete. Missing: ${envNames.join(", ")}. Copy .env.example to .env.local and fill in values from Firebase Console → Project Settings → Your apps → Web app.`
+  );
 }
 
 // Initialize Firebase only if there are no instantiated apps
