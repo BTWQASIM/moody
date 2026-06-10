@@ -153,11 +153,13 @@ function ThreadListView({
         <div className="flex items-center justify-between">
           <h3 className="font-semibold">Messages</h3>
           <Dialog>
-            <DialogTrigger asChild>
-              <Button size="sm" onClick={onCreateThread}>
-                <Plus className="size-4" />
-              </Button>
-            </DialogTrigger>
+            <DialogTrigger
+              render={
+                <Button size="sm">
+                  <Plus className="size-4" />
+                </Button>
+              }
+            />
             <CreateThreadDialog onComplete={onCreateThread} />
           </Dialog>
         </div>

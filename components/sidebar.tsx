@@ -59,7 +59,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                   : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground",
               )}
             >
-              <Icon className="size-[18px] shrink-0" />
+              <Icon className="size-4.5 shrink-0" />
               <span className="truncate">{item.label}</span>
             </Link>
           )

@@ -173,12 +173,14 @@ function PatientsContent() {
               </SelectContent>
             </Select>
             <Dialog open={isNewPatientOpen} onOpenChange={setIsNewPatientOpen}>
-              <DialogTrigger asChild>
-                <Button className="gap-2">
-                  <Plus className="h-4 w-4" />
-                  Add Patient
-                </Button>
-              </DialogTrigger>
+              <DialogTrigger
+                render={
+                  <Button className="gap-2">
+                    <Plus className="h-4 w-4" />
+                    Add Patient
+                  </Button>
+                }
+              />
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>Add New Patient</DialogTitle>

@@ -1,4 +1,5 @@
 import { initializeApp, getApps } from "firebase/app";
+import { getAnalytics, isSupported, type Analytics } from "firebase/analytics";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
@@ -34,5 +35,20 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const storage = getStorage(app);
 
-export { app, auth, db, storage };
+let analytics: Analytics | null = null;
+
+// Firebase Analytics only runs in the browser and only when supported.
+if (typeof window !== "undefined") {
+  isSupported()
+    .then((supported) => {
+      if (supported) {
+        analytics = getAnalytics(app);
+      }
+    })
+    .catch(() => {
+      analytics = null;
+    });
+}
+
+export { app, auth, db, storage, analytics };
 

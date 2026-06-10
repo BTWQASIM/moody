@@ -1,5 +1,7 @@
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from app.firebase import get_firebase_app
 from app.api import health, auth, patients, appointments, services, mood, notes, alerts, messages, notifications, uploads, ai
 
@@ -16,6 +18,10 @@ app.add_middleware(
 
 # Initialize Firebase Admin
 get_firebase_app()
+
+uploads_dir = os.path.abspath(os.getenv("LOCAL_UPLOADS_DIR", "./uploads"))
+os.makedirs(uploads_dir, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
 
 app.include_router(health.router, tags=["Health"])
 app.include_router(auth.router, tags=["Auth"])

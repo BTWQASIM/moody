@@ -3,7 +3,7 @@ Data Access Layer for Firestore collections
 Provides methods for CRUD operations and queries
 """
 
-from typing import List, Optional, Any, Dict
+from typing import List, Optional, Any, Dict, Iterable, cast
 from datetime import datetime
 from firebase_admin import firestore
 from app.firebase import get_db_client
@@ -28,6 +28,55 @@ class FirestoreDAO:
     def __init__(self):
         self.db = get_db_client()
 
+    def _doc_data(self, doc: Any) -> Optional[Dict[str, Any]]:
+        """Normalize Firestore snapshot access for static typing and runtime safety."""
+        snapshot = cast(Any, doc)
+        if not snapshot or not getattr(snapshot, "exists", False):
+            return None
+        data = snapshot.to_dict()
+        return data if isinstance(data, dict) else None
+
+    def _stream_data(self, docs: Iterable[Any]) -> List[Dict[str, Any]]:
+        """Collect stream results while filtering non-dict entries."""
+        rows: List[Dict[str, Any]] = []
+        for doc in docs:
+            data = cast(Any, doc).to_dict()
+            if isinstance(data, dict):
+                rows.append(data)
+        return rows
+
+    def _scheduled_at_epoch(self, value: Any) -> float:
+        """Normalize scheduledAt values to epoch seconds for safe comparisons."""
+        if isinstance(value, datetime):
+            try:
+                return value.timestamp()
+            except Exception:
+                return 0.0
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                return 0.0
+        return 0.0
+
+    def _sort_by_datetime_field(
+        self,
+        rows: List[Dict[str, Any]],
+        field: str,
+        *,
+        reverse: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Sort rows by a datetime-like field using epoch normalization."""
+        return sorted(
+            rows,
+            key=lambda item: self._scheduled_at_epoch(item.get(field)),
+            reverse=reverse,
+        )
+
+    def _sort_by_scheduled_at(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Sort appointments by scheduledAt safely without relying on Firestore indexes."""
+        return sorted(rows, key=lambda item: self._scheduled_at_epoch(item.get("scheduledAt")))
+
     # ========================================================================
     # Therapist Operations
     # ========================================================================
@@ -37,7 +86,7 @@ class FirestoreDAO:
         if not self.db:
             return None
         doc = self.db.collection("therapists").document(uid).get()
-        return doc.to_dict() if doc.exists else None
+        return self._doc_data(doc)
 
     def create_therapist(self, profile: TherapistProfile) -> str:
         """Create a new therapist profile (UID as document ID)"""
@@ -65,7 +114,7 @@ class FirestoreDAO:
         if not self.db:
             return None
         doc = self.db.collection("patients").document(patient_id).get()
-        return doc.to_dict() if doc.exists else None
+        return self._doc_data(doc)
 
     def get_patients_for_therapist(self, therapist_uid: str) -> List[Dict[str, Any]]:
         """Get all patients for a therapist"""
@@ -76,7 +125,7 @@ class FirestoreDAO:
             .where("therapistUid", "==", therapist_uid)
             .stream()
         )
-        return [doc.to_dict() for doc in docs]
+        return self._stream_data(docs)
 
     def create_patient(self, profile: PatientProfile) -> str:
         """Create a new patient profile"""
@@ -112,7 +161,7 @@ class FirestoreDAO:
         if not self.db:
             return None
         doc = self.db.collection("appointments").document(appointment_id).get()
-        return doc.to_dict() if doc.exists else None
+        return self._doc_data(doc)
 
     def get_appointments_for_therapist(
         self, therapist_uid: str, start_date: Optional[datetime] = None
@@ -120,11 +169,20 @@ class FirestoreDAO:
         """Get appointments for a therapist"""
         if not self.db:
             return []
-        query = self.db.collection("appointments").where("therapistUid", "==", therapist_uid)
+        docs = (
+            self.db.collection("appointments")
+            .where("therapistUid", "==", therapist_uid)
+            .stream()
+        )
+        rows = self._stream_data(docs)
         if start_date:
-            query = query.where("scheduledAt", ">=", start_date)
-        docs = query.order_by("scheduledAt").stream()
-        return [doc.to_dict() for doc in docs]
+            threshold = self._scheduled_at_epoch(start_date)
+            rows = [
+                row
+                for row in rows
+                if self._scheduled_at_epoch(row.get("scheduledAt")) >= threshold
+            ]
+        return self._sort_by_scheduled_at(rows)
 
     def get_appointments_for_patient(self, patient_id: str) -> List[Dict[str, Any]]:
         """Get appointments for a patient"""
@@ -133,10 +191,9 @@ class FirestoreDAO:
         docs = (
             self.db.collection("appointments")
             .where("patientId", "==", patient_id)
-            .order_by("scheduledAt")
             .stream()
         )
-        return [doc.to_dict() for doc in docs]
+        return self._sort_by_scheduled_at(self._stream_data(docs))
 
     def create_appointment(self, appointment: AppointmentDetails) -> str:
         """Create a new appointment"""
@@ -161,20 +218,35 @@ class FirestoreDAO:
         """Get all active services for a therapist"""
         if not self.db:
             return []
+        # Query only by therapist UID to avoid composite-index requirements,
+        # then filter active services in application code.
         docs = (
             self.db.collection("services")
             .where("therapistUid", "==", therapist_uid)
-            .where("isActive", "==", True)
             .stream()
         )
-        return [doc.to_dict() for doc in docs]
+        services: List[Dict[str, Any]] = []
+        for doc in docs:
+            data = cast(Any, doc).to_dict()
+            if not isinstance(data, dict):
+                continue
+            if not data.get("id"):
+                data["id"] = cast(Any, doc).id
+            services.append(data)
+        for row in services:
+            if "isActive" not in row:
+                row["isActive"] = True
+        return [row for row in services if row.get("isActive", True)]
 
     def create_service(self, service: ServiceOffering) -> str:
         """Create a new service offering"""
         if not self.db:
             raise Exception("Firestore not configured")
-        doc_ref = self.db.collection("services").add(service.model_dump(by_alias=False))
-        return doc_ref[1].id
+        doc_ref = self.db.collection("services").document()
+        payload = service.model_dump(by_alias=False)
+        payload["id"] = doc_ref.id
+        doc_ref.set(payload)
+        return doc_ref.id
 
     def update_service(self, service_id: str, updates: Dict[str, Any]) -> bool:
         """Update service"""
@@ -197,11 +269,11 @@ class FirestoreDAO:
         docs = (
             self.db.collection("moodEntries")
             .where("patientId", "==", patient_id)
-            .order_by("recordedAt", direction=firestore.Query.DESCENDING)
-            .limit(limit)
             .stream()
         )
-        return [doc.to_dict() for doc in docs]
+        rows = self._stream_data(docs)
+        rows = self._sort_by_datetime_field(rows, "recordedAt", reverse=True)
+        return rows[:limit]
 
     def create_mood_entry(self, entry: MoodEntry) -> str:
         """Create a new mood entry"""
@@ -221,10 +293,13 @@ class FirestoreDAO:
         docs = (
             self.db.collection("clinicalNotes")
             .where("patientId", "==", patient_id)
-            .order_by("createdAt", direction=firestore.Query.DESCENDING)
             .stream()
         )
-        return [doc.to_dict() for doc in docs]
+        return self._sort_by_datetime_field(
+            self._stream_data(docs),
+            "createdAt",
+            reverse=True,
+        )
 
     def create_clinical_note(self, note: ClinicalNote) -> str:
         """Create a new clinical note"""
@@ -244,11 +319,14 @@ class FirestoreDAO:
         docs = (
             self.db.collection("riskAlerts")
             .where("therapistUid", "==", therapist_uid)
-            .where("isAcknowledged", "==", False)
-            .order_by("createdAt", direction=firestore.Query.DESCENDING)
             .stream()
         )
-        return [doc.to_dict() for doc in docs]
+        rows = [
+            row
+            for row in self._stream_data(docs)
+            if not row.get("isAcknowledged", False)
+        ]
+        return self._sort_by_datetime_field(rows, "createdAt", reverse=True)
 
     def create_risk_alert(self, alert: RiskAlert) -> str:
         """Create a new risk alert"""
@@ -279,11 +357,14 @@ class FirestoreDAO:
         docs = (
             self.db.collection("messageThreads")
             .where("therapistUid", "==", therapist_uid)
-            .where("isActive", "==", True)
-            .order_by("lastMessageAt", direction=firestore.Query.DESCENDING)
             .stream()
         )
-        return [doc.to_dict() for doc in docs]
+        rows = [
+            row
+            for row in self._stream_data(docs)
+            if row.get("isActive", True)
+        ]
+        return self._sort_by_datetime_field(rows, "lastMessageAt", reverse=True)
 
     def get_messages_for_thread(self, thread_id: str) -> List[Dict[str, Any]]:
         """Get all messages in a thread"""
@@ -292,10 +373,9 @@ class FirestoreDAO:
         docs = (
             self.db.collection("messages")
             .where("threadId", "==", thread_id)
-            .order_by("createdAt")
             .stream()
         )
-        return [doc.to_dict() for doc in docs]
+        return self._sort_by_datetime_field(self._stream_data(docs), "createdAt")
 
     def create_message_thread(self, thread: MessageThread) -> str:
         """Create a new message thread"""
@@ -322,11 +402,14 @@ class FirestoreDAO:
         docs = (
             self.db.collection("notifications")
             .where("userId", "==", user_id)
-            .order_by("createdAt", direction=firestore.Query.DESCENDING)
-            .limit(50)
             .stream()
         )
-        return [doc.to_dict() for doc in docs]
+        rows = self._sort_by_datetime_field(
+            self._stream_data(docs),
+            "createdAt",
+            reverse=True,
+        )
+        return rows[:50]
 
     def create_notification(self, notification: Notification) -> str:
         """Create a new notification"""

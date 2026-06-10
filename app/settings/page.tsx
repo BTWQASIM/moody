@@ -1,20 +1,161 @@
 "use client"
 
+import { useEffect, useState } from "react"
+import { ProtectedRoute } from "@/app/protected-route"
+import { useAuth } from "@/app/providers"
 import { PortalShell } from "@/components/portal-shell"
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { therapist } from "@/lib/data"
-import { Smartphone, Laptop, Monitor, ShieldCheck, KeyRound } from "lucide-react"
+import { Smartphone, Laptop, Monitor, ShieldCheck, KeyRound, Loader2 } from "lucide-react"
 
 const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
+type ProfileForm = {
+  name: string
+  email: string
+  licenseNumber: string
+  qualifications: string
+  specializations: string
+  profilePhoto: string
+  bio: string
+}
+
 export default function SettingsPage() {
+  return (
+    <ProtectedRoute>
+      <SettingsContent />
+    </ProtectedRoute>
+  )
+}
+
+function SettingsContent() {
+  const { user } = useAuth()
+  const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+  const [loadingProfile, setLoadingProfile] = useState(true)
+  const [savingProfile, setSavingProfile] = useState(false)
+  const [saveMessage, setSaveMessage] = useState<string | null>(null)
+  const [profileForm, setProfileForm] = useState<ProfileForm>({
+    name: "",
+    email: "",
+    licenseNumber: "",
+    qualifications: "",
+    specializations: "",
+    profilePhoto: "",
+    bio: "",
+  })
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadProfile() {
+      if (!user) return
+      setLoadingProfile(true)
+      setSaveMessage(null)
+
+      try {
+        const idToken = await user.getIdToken()
+        const response = await fetch(`${apiBaseUrl}/api/auth/profile`, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${idToken}`,
+          },
+        })
+
+        if (!response.ok) {
+          throw new Error("Failed to fetch profile")
+        }
+
+        const result = await response.json()
+
+        if (cancelled) return
+
+        const data = result?.profile || {}
+        const specializations = Array.isArray(data.specializations)
+          ? data.specializations.join(", ")
+          : ""
+
+        setProfileForm({
+          name: (data.name as string) || user.displayName || "",
+          email: (data.email as string) || user.email || "",
+          licenseNumber: (data.licenseNumber as string) || "",
+          qualifications: (data.qualifications as string) || "",
+          specializations,
+          profilePhoto: (data.profilePhoto as string) || user.photoURL || "",
+          bio: (data.bio as string) || "",
+        })
+      } catch {
+        if (!cancelled) {
+          setSaveMessage("Could not load your profile data.")
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingProfile(false)
+        }
+      }
+    }
+
+    loadProfile()
+    return () => {
+      cancelled = true
+    }
+  }, [user])
+
+  async function handleSaveProfile() {
+    if (!user) return
+    setSavingProfile(true)
+    setSaveMessage(null)
+
+    try {
+      const specializations = profileForm.specializations
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean)
+      const idToken = await user.getIdToken()
+
+      const response = await fetch(`${apiBaseUrl}/api/auth/profile`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({
+          name: profileForm.name.trim(),
+          email: profileForm.email.trim(),
+          licenseNumber: profileForm.licenseNumber.trim(),
+          qualifications: profileForm.qualifications.trim(),
+          specializations,
+          profilePhoto: profileForm.profilePhoto.trim(),
+          bio: profileForm.bio.trim(),
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error("Failed to save profile")
+      }
+
+      setSaveMessage("Profile saved successfully.")
+    } catch {
+      setSaveMessage("Failed to save profile. Please try again.")
+    } finally {
+      setSavingProfile(false)
+    }
+  }
+
+  const avatarName = profileForm.name || user?.displayName || "Therapist"
+  const avatarFallback = avatarName
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("") || "TH"
+
   return (
     <PortalShell title="Settings" subtitle="Manage your profile, availability, and security">
       <Tabs defaultValue="profile">
@@ -34,28 +175,101 @@ export default function SettingsPage() {
             <CardContent className="space-y-5">
               <div className="flex items-center gap-4">
                 <Avatar className="size-16">
-                  <AvatarImage src={therapist.avatar || "/placeholder.svg"} alt={therapist.name} />
-                  <AvatarFallback>EH</AvatarFallback>
+                  <AvatarImage src={profileForm.profilePhoto || "/placeholder.svg"} alt={avatarName} />
+                  <AvatarFallback>{avatarFallback}</AvatarFallback>
                 </Avatar>
                 <div>
-                  <Button variant="outline" size="sm">
-                    Change photo
-                  </Button>
-                  <p className="mt-1 text-xs text-muted-foreground">JPG or PNG, max 5MB</p>
+                  <p className="text-sm font-medium">Profile photo URL</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Paste an image URL to update avatar.</p>
                 </div>
                 <Badge variant="outline" className="ml-auto border-success/30 bg-success/10 text-success">
                   <ShieldCheck className="size-3" />
                   Verified
                 </Badge>
               </div>
+
+              {saveMessage ? (
+                <p className="rounded-md bg-muted px-3 py-2 text-sm text-foreground">{saveMessage}</p>
+              ) : null}
+
               <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Full Name" value={therapist.name} />
-                <Field label="Email" value={therapist.email} />
-                <Field label="License Number" value={therapist.license} />
-                <Field label="Specialization" value="Mood & Anxiety Disorders" />
+                <div className="space-y-1.5">
+                  <Label htmlFor="fullName">Full Name</Label>
+                  <Input
+                    id="fullName"
+                    value={profileForm.name}
+                    onChange={(e) => setProfileForm((prev) => ({ ...prev, name: e.target.value }))}
+                    disabled={loadingProfile || savingProfile}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="email">Email</Label>
+                  <Input
+                    id="email"
+                    type="email"
+                    value={profileForm.email}
+                    onChange={(e) => setProfileForm((prev) => ({ ...prev, email: e.target.value }))}
+                    disabled={loadingProfile || savingProfile}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="licenseNumber">License Number</Label>
+                  <Input
+                    id="licenseNumber"
+                    value={profileForm.licenseNumber}
+                    onChange={(e) => setProfileForm((prev) => ({ ...prev, licenseNumber: e.target.value }))}
+                    disabled={loadingProfile || savingProfile}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="qualifications">Qualifications</Label>
+                  <Input
+                    id="qualifications"
+                    value={profileForm.qualifications}
+                    onChange={(e) => setProfileForm((prev) => ({ ...prev, qualifications: e.target.value }))}
+                    disabled={loadingProfile || savingProfile}
+                  />
+                </div>
+                <div className="space-y-1.5 sm:col-span-2">
+                  <Label htmlFor="specializations">Specializations (comma-separated)</Label>
+                  <Input
+                    id="specializations"
+                    value={profileForm.specializations}
+                    onChange={(e) => setProfileForm((prev) => ({ ...prev, specializations: e.target.value }))}
+                    disabled={loadingProfile || savingProfile}
+                  />
+                </div>
+                <div className="space-y-1.5 sm:col-span-2">
+                  <Label htmlFor="profilePhoto">Profile Photo URL</Label>
+                  <Input
+                    id="profilePhoto"
+                    value={profileForm.profilePhoto}
+                    onChange={(e) => setProfileForm((prev) => ({ ...prev, profilePhoto: e.target.value }))}
+                    disabled={loadingProfile || savingProfile}
+                  />
+                </div>
+                <div className="space-y-1.5 sm:col-span-2">
+                  <Label htmlFor="bio">Professional Bio</Label>
+                  <Textarea
+                    id="bio"
+                    rows={4}
+                    value={profileForm.bio}
+                    onChange={(e) => setProfileForm((prev) => ({ ...prev, bio: e.target.value }))}
+                    disabled={loadingProfile || savingProfile}
+                  />
+                </div>
               </div>
               <div className="flex justify-end">
-                <Button>Save changes</Button>
+                <Button onClick={handleSaveProfile} disabled={loadingProfile || savingProfile || !user}>
+                  {savingProfile ? (
+                    <>
+                      <Loader2 className="mr-2 size-4 animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    "Save changes"
+                  )}
+                </Button>
               </div>
             </CardContent>
           </Card>

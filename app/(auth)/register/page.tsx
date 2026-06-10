@@ -10,8 +10,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import { createUserWithEmailAndPassword } from "firebase/auth"
-import { auth, db } from "@/lib/firebase"
-import { doc, setDoc } from "firebase/firestore"
+import { auth } from "@/lib/firebase"
 
 const specializationOptions = [
   "Anxiety",
@@ -23,26 +22,102 @@ const specializationOptions = [
   "Grief Counseling",
 ]
 
+type RegisterFormData = {
+  name: string
+  email: string
+  password: string
+  phone: string
+}
+
+type UploadStatus = "idle" | "selected" | "uploading" | "uploaded" | "failed"
+
 export default function RegisterPage() {
   const router = useRouter()
   const [step, setStep] = useState(1)
   const [selected, setSelected] = useState<string[]>(["Anxiety"])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
+  const [profilePhotoFile, setProfilePhotoFile] = useState<File | null>(null)
+  const [documentFiles, setDocumentFiles] = useState<File[]>([])
+  const [photoStatus, setPhotoStatus] = useState<UploadStatus>("idle")
+  const [docStatus, setDocStatus] = useState<UploadStatus>("idle")
+  const [uploadedDocCount, setUploadedDocCount] = useState(0)
 
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<RegisterFormData>({
     name: "",
     email: "",
     password: "",
     phone: "",
-    qualifications: "",
-    license: "",
-    experience: "",
-    bio: ""
   })
 
   function toggleSpec(s: string) {
     setSelected((prev) => (prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]))
+  }
+
+  async function uploadRegistrationFiles(idToken: string) {
+    const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+    let profilePhoto = ""
+    const documentUrls: string[] = []
+
+    if (profilePhotoFile) {
+      setPhotoStatus("uploading")
+      const formData = new FormData()
+      formData.append("file", profilePhotoFile)
+      const res = await fetch(`${baseUrl}/api/uploads/profile-photo`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${idToken}`,
+        },
+        body: formData,
+      })
+
+      if (!res.ok) {
+        setPhotoStatus("failed")
+        throw new Error("Failed to upload profile photo")
+      }
+
+      const data = await res.json()
+      profilePhoto = data.fileUrl || ""
+      setPhotoStatus("uploaded")
+    } else {
+      setPhotoStatus("idle")
+    }
+
+    setUploadedDocCount(0)
+
+    for (const file of documentFiles) {
+      setDocStatus("uploading")
+      const formData = new FormData()
+      formData.append("file", file)
+      formData.append("documentType", "license")
+
+      const res = await fetch(`${baseUrl}/api/uploads/document`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${idToken}`,
+        },
+        body: formData,
+      })
+
+      if (!res.ok) {
+        setDocStatus("failed")
+        throw new Error("Failed to upload one or more documents")
+      }
+
+      const data = await res.json()
+      if (data.fileUrl) {
+        documentUrls.push(data.fileUrl)
+        setUploadedDocCount((prev) => prev + 1)
+      }
+    }
+
+    if (documentFiles.length > 0) {
+      setDocStatus("uploaded")
+    } else {
+      setDocStatus("idle")
+    }
+
+    return { profilePhoto, documentUrls }
   }
 
   if (step === 3) {
@@ -85,9 +160,11 @@ export default function RegisterPage() {
           ))}
         </div>
 
-        <Button asChild variant="outline" className="w-full bg-transparent">
-          <Link href="/login">Return to sign in</Link>
-        </Button>
+        <Link href="/login">
+          <Button variant="outline" className="w-full bg-transparent">
+            Return to sign in
+          </Button>
+        </Link>
       </div>
     )
   }
@@ -135,45 +212,93 @@ export default function RegisterPage() {
 
       {step === 1 ? (
         <form
+          key="register-step-1"
           onSubmit={(e) => {
             e.preventDefault()
-            const data = new FormData(e.currentTarget)
-            setFormData(prev => ({
-              ...prev,
-              name: data.get("name") as string,
-              email: data.get("email") as string,
-              password: data.get("password") as string,
-              phone: data.get("phone") as string
-            }))
             setStep(2)
           }}
           className="space-y-4"
         >
           <div className="space-y-2">
             <Label htmlFor="name">Full name</Label>
-            <Input id="name" name="name" defaultValue={formData.name} required placeholder="Dr. Jane Doe" className="bg-card" />
+            <Input
+              id="name"
+              name="name"
+              value={formData.name ?? ""}
+              onChange={(e) => setFormData((prev) => ({ ...prev, name: e.target.value }))}
+              required
+              placeholder="Dr. Jane Doe"
+              className="bg-card"
+            />
           </div>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
-              <Input id="email" name="email" defaultValue={formData.email} type="email" required placeholder="you@clinic.com" className="bg-card" />
+              <Input
+                id="email"
+                name="email"
+                value={formData.email ?? ""}
+                onChange={(e) => setFormData((prev) => ({ ...prev, email: e.target.value }))}
+                type="email"
+                required
+                placeholder="you@clinic.com"
+                className="bg-card"
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="password">Password</Label>
-              <Input id="password" name="password" defaultValue={formData.password} type="password" required placeholder="Choose a secure password" className="bg-card" />
+              <Input
+                id="password"
+                name="password"
+                value={formData.password ?? ""}
+                onChange={(e) => setFormData((prev) => ({ ...prev, password: e.target.value }))}
+                type="password"
+                required
+                placeholder="Choose a secure password"
+                className="bg-card"
+              />
             </div>
           </div>
           <div className="space-y-2">
             <Label htmlFor="phone">Phone number</Label>
-            <Input id="phone" name="phone" defaultValue={formData.phone} type="tel" required placeholder="+1 (555) 000-0000" className="bg-card" />
+            <Input
+              id="phone"
+              name="phone"
+              value={formData.phone ?? ""}
+              onChange={(e) => setFormData((prev) => ({ ...prev, phone: e.target.value }))}
+              type="tel"
+              required
+              placeholder="+1 (555) 000-0000"
+              className="bg-card"
+            />
           </div>
           <div className="space-y-2">
             <Label>Profile photo</Label>
             <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-dashed border-border bg-card px-4 py-3 text-sm text-muted-foreground transition-colors hover:border-primary/40 hover:bg-accent/30">
               <Upload className="size-4" />
               Upload a professional headshot
-              <input type="file" accept="image/*" className="sr-only" />
+              <input
+                type="file"
+                accept="image/*"
+                className="sr-only"
+                onChange={(e) => {
+                  const selectedFile = e.target.files?.[0] || null
+                  setProfilePhotoFile(selectedFile)
+                  setPhotoStatus(selectedFile ? "selected" : "idle")
+                }}
+              />
             </label>
+            <p className="text-xs text-muted-foreground">
+              {photoStatus === "uploaded"
+                ? "Profile photo uploaded"
+                : photoStatus === "uploading"
+                  ? "Uploading profile photo..."
+                  : photoStatus === "failed"
+                    ? "Profile photo upload failed"
+                    : profilePhotoFile
+                      ? `Selected: ${profilePhotoFile.name}`
+                      : "No profile photo selected"}
+            </p>
           </div>
           <Button type="submit" className="w-full" size="lg">
             Continue
@@ -182,6 +307,7 @@ export default function RegisterPage() {
         </form>
       ) : (
         <form
+          key="register-step-2"
           onSubmit={async (e) => {
             e.preventDefault()
             setError("")
@@ -196,41 +322,44 @@ export default function RegisterPage() {
 
               // 1. Create Firebase Auth user
               const userCred = await createUserWithEmailAndPassword(auth, formData.email, formData.password)
-              
-              // 2. Create Therapist Profile in Firestore
-              await setDoc(doc(db, "therapists", userCred.user.uid), {
-                uid: userCred.user.uid,
-                name: formData.name,
-                email: formData.email,
-                phone: formData.phone,
-                qualifications: qual,
-                licenseNumber: lic,
-                yearsOfExperience: parseInt(exp),
-                bio: bio,
-                specializations: selected,
-                status: "pending_verification", 
-                createdAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString()
-              })
 
-              // 3. Call backend to set custom claims (role, verification status, etc)
+              // 2. Upload optional profile photo and documents.
+              const idToken = await userCred.user.getIdToken()
+              const { profilePhoto, documentUrls } = await uploadRegistrationFiles(idToken)
+
+              // 3. Call backend to set custom claims and persist therapist profile.
               try {
-                const idToken = await userCred.user.getIdToken()
-                await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/auth/set-claims`, {
-                  method: 'POST',
+                const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/auth/set-claims`, {
+                  method: "POST",
                   headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${idToken}`
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${idToken}`,
                   },
                   body: JSON.stringify({
                     uid: userCred.user.uid,
-                    role: 'therapist',
-                    verified: false
-                  })
+                    role: "therapist",
+                    verified: false,
+                    status: "pending_verification",
+                    name: formData.name,
+                    email: formData.email,
+                    phone: formData.phone,
+                    qualifications: qual,
+                    licenseNumber: lic,
+                    yearsOfExperience: parseInt(exp, 10),
+                    bio,
+                    specializations: selected,
+                    profilePhoto,
+                    documentUrls,
+                  }),
                 })
+
+                if (!response.ok) {
+                  const errData = await response.json().catch(() => ({}))
+                  throw new Error(errData.detail || "Failed to save therapist profile")
+                }
               } catch (err) {
                 console.warn('Could not set custom claims:', err)
-                // Non-blocking - user still created, claims can be set manually
+                throw err
               }
 
               setStep(3)
@@ -305,16 +434,38 @@ export default function RegisterPage() {
             <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-dashed border-border bg-card px-4 py-3 text-sm text-muted-foreground transition-colors hover:border-primary/40 hover:bg-accent/30">
               <FileText className="size-4" />
               Upload license &amp; certification (PDF)
-              <input type="file" accept=".pdf,.png,.jpg" multiple className="sr-only" />
+              <input
+                type="file"
+                accept=".pdf,.png,.jpg"
+                multiple
+                className="sr-only"
+                onChange={(e) => {
+                  const selectedFiles = Array.from(e.target.files || [])
+                  setDocumentFiles(selectedFiles)
+                  setDocStatus(selectedFiles.length > 0 ? "selected" : "idle")
+                  setUploadedDocCount(0)
+                }}
+              />
             </label>
+            <p className="text-xs text-muted-foreground">
+              {docStatus === "uploaded"
+                ? `Documents uploaded (${uploadedDocCount}/${documentFiles.length})`
+                : docStatus === "uploading"
+                  ? `Uploading documents (${uploadedDocCount}/${documentFiles.length})...`
+                  : docStatus === "failed"
+                    ? "Document upload failed"
+                    : documentFiles.length > 0
+                      ? `${documentFiles.length} document(s) selected`
+                      : "No documents selected"}
+            </p>
           </div>
 
           <div className="flex gap-3">
             <Button type="button" variant="outline" className="flex-1 bg-transparent" onClick={() => setStep(1)}>
               Back
             </Button>
-            <Button type="submit" className="flex-1">
-              Submit for verification
+            <Button type="submit" className="flex-1" disabled={loading}>
+              {loading ? "Submitting..." : "Submit for verification"}
             </Button>
           </div>
         </form>

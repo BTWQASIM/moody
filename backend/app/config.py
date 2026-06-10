@@ -4,7 +4,7 @@ Handles environment variables and sensitive data
 """
 
 import os
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     # Firebase
     firebase_credentials_path: str = os.getenv(
         "FIREBASE_CREDENTIALS_PATH", "./firebase-adminsdk.json"
+    )
+    firebase_project_id: str = os.getenv("FIREBASE_PROJECT_ID", "")
+    firebase_storage_bucket: str = os.getenv(
+        "FIREBASE_STORAGE_BUCKET", "pingmytherapist.firebasestorage.app"
     )
 
     # Gemini AI
@@ -29,9 +33,11 @@ class Settings(BaseSettings):
     # Environment
     debug: bool = os.getenv("DEBUG", "false").lower() == "true"
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=False,
+        extra="ignore",
+    )
 
 
 # Global settings instance

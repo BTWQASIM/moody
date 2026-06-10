@@ -3,16 +3,23 @@ File upload and management API endpoints
 Handles profile photos, documents, recordings, and exports
 """
 
+from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, HTTPException, status, Header, UploadFile, File, Form
 from firebase_admin import auth as firebase_auth, storage
 from datetime import datetime, timedelta
 import os
+import re
+import secrets
 
 from app.db import FirestoreDAO
 
 router = APIRouter(prefix="/api/uploads", tags=["uploads"])
 db = FirestoreDAO()
+LOCAL_UPLOADS_ROOT = Path(os.getenv("LOCAL_UPLOADS_DIR", "./uploads")).resolve()
+LOCAL_UPLOADS_URL_BASE = os.getenv(
+    "LOCAL_UPLOADS_URL_BASE", "http://localhost:8000/uploads"
+).rstrip("/")
 
 
 def verify_token(authorization: str = Header(...)):
@@ -60,6 +67,37 @@ def generate_signed_url(bucket_name: str, blob_name: str) -> str:
         return f"https://storage.googleapis.com/{bucket_name}/{blob_name}"
 
 
+def sanitize_segment(value: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9_.-]", "_", value)
+    return cleaned or "file"
+
+
+def local_upload(file_path: str, contents: bytes) -> str:
+    absolute_path = (LOCAL_UPLOADS_ROOT / file_path).resolve()
+
+    # Prevent path traversal outside uploads root.
+    if not str(absolute_path).startswith(str(LOCAL_UPLOADS_ROOT)):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid file path",
+        )
+
+    absolute_path.parent.mkdir(parents=True, exist_ok=True)
+    absolute_path.write_bytes(contents)
+    return f"{LOCAL_UPLOADS_URL_BASE}/{file_path}"
+
+
+def upload_to_storage_or_local(file_path: str, contents: bytes, content_type: str) -> str:
+    try:
+        bucket = get_bucket()
+        blob = bucket.blob(file_path)
+        blob.upload_from_string(contents, content_type=content_type)
+        return generate_signed_url(bucket.name, file_path)
+    except Exception:
+        # Firebase Storage may be unavailable in local development.
+        return local_upload(file_path, contents)
+
+
 @router.post("/profile-photo")
 async def upload_profile_photo(
     file: UploadFile = File(...),
@@ -82,27 +120,20 @@ async def upload_profile_photo(
         )
 
     try:
-        bucket = get_bucket()
-        
         # Determine file extension
-        ext = file.filename.split(".")[-1] if file.filename else "jpg"
-        file_path = f"profile-photos/{user_id}/{datetime.utcnow().timestamp()}.{ext}"
-        
-        # Upload file
-        blob = bucket.blob(file_path)
         contents = await file.read()
-        blob.upload_from_string(
-            contents,
-            content_type=file.content_type,
+        ext = file.filename.split(".")[-1] if file.filename else "jpg"
+        ext = sanitize_segment(ext.lower())
+        file_path = (
+            f"profile-photos/{sanitize_segment(user_id)}/"
+            f"{datetime.utcnow().timestamp()}-{secrets.token_hex(4)}.{ext}"
         )
-
-        # Generate signed URL
-        signed_url = generate_signed_url(bucket.name, file_path)
+        file_url = upload_to_storage_or_local(file_path, contents, file.content_type)
 
         return {
             "status": "success",
             "message": "Profile photo uploaded",
-            "fileUrl": signed_url,
+            "fileUrl": file_url,
             "filePath": file_path,
         }
     except HTTPException:
@@ -145,29 +176,23 @@ async def upload_document(
         )
 
     try:
-        bucket = get_bucket()
-
-        # Extract file extension
-        ext = file.filename.split(".")[-1] if file.filename else "pdf"
-        file_path = (
-            f"documents/{user_id}/{documentType}/{datetime.utcnow().timestamp()}.{ext}"
-        )
-
-        # Upload file
-        blob = bucket.blob(file_path)
         contents = await file.read()
-        blob.upload_from_string(
-            contents,
-            content_type=file.content_type or "application/octet-stream",
+        ext = file.filename.split(".")[-1] if file.filename else "pdf"
+        ext = sanitize_segment(ext.lower())
+        file_path = (
+            f"documents/{sanitize_segment(user_id)}/{sanitize_segment(documentType)}/"
+            f"{datetime.utcnow().timestamp()}-{secrets.token_hex(4)}.{ext}"
         )
-
-        # Generate signed URL
-        signed_url = generate_signed_url(bucket.name, file_path)
+        file_url = upload_to_storage_or_local(
+            file_path,
+            contents,
+            file.content_type or "application/octet-stream",
+        )
 
         return {
             "status": "success",
             "message": "Document uploaded",
-            "fileUrl": signed_url,
+            "fileUrl": file_url,
             "filePath": file_path,
             "documentType": documentType,
         }
@@ -218,27 +243,19 @@ async def upload_audio_recording(
         )
 
     try:
-        bucket = get_bucket()
-
-        # Extract file extension
-        ext = file.filename.split(".")[-1] if file.filename else "m4a"
-        file_path = f"recordings/{therapist_uid}/{patientId}/{sessionDate}/{datetime.utcnow().timestamp()}.{ext}"
-
-        # Upload file
-        blob = bucket.blob(file_path)
         contents = await file.read()
-        blob.upload_from_string(
-            contents,
-            content_type=file.content_type,
+        ext = file.filename.split(".")[-1] if file.filename else "m4a"
+        ext = sanitize_segment(ext.lower())
+        file_path = (
+            f"recordings/{sanitize_segment(therapist_uid)}/{sanitize_segment(patientId)}/"
+            f"{sanitize_segment(sessionDate)}/{datetime.utcnow().timestamp()}-{secrets.token_hex(4)}.{ext}"
         )
-
-        # Generate signed URL
-        signed_url = generate_signed_url(bucket.name, file_path)
+        file_url = upload_to_storage_or_local(file_path, contents, file.content_type)
 
         return {
             "status": "success",
             "message": "Recording uploaded",
-            "fileUrl": signed_url,
+            "fileUrl": file_url,
             "filePath": file_path,
         }
     except HTTPException:
@@ -281,30 +298,26 @@ async def upload_session_export(
         )
 
     try:
-        bucket = get_bucket()
-
-        # Extract file extension
-        ext = file.filename.split(".")[-1] if file.filename else "pdf"
-        file_path = f"exports/{therapist_uid}/{appointmentId}/{datetime.utcnow().timestamp()}.{ext}"
-
-        # Upload file
-        blob = bucket.blob(file_path)
         contents = await file.read()
-        blob.upload_from_string(
+        ext = file.filename.split(".")[-1] if file.filename else "pdf"
+        ext = sanitize_segment(ext.lower())
+        file_path = (
+            f"exports/{sanitize_segment(therapist_uid)}/{sanitize_segment(appointmentId)}/"
+            f"{datetime.utcnow().timestamp()}-{secrets.token_hex(4)}.{ext}"
+        )
+        file_url = upload_to_storage_or_local(
+            file_path,
             contents,
-            content_type=file.content_type or "application/octet-stream",
+            file.content_type or "application/octet-stream",
         )
 
-        # Generate signed URL
-        signed_url = generate_signed_url(bucket.name, file_path)
-
         # Update appointment with export URL
-        db.update_appointment(appointmentId, {"sessionNotes": signed_url})
+        db.update_appointment(appointmentId, {"sessionNotes": file_url})
 
         return {
             "status": "success",
             "message": "Session exported and uploaded",
-            "fileUrl": signed_url,
+            "fileUrl": file_url,
             "filePath": file_path,
         }
     except HTTPException:
@@ -330,16 +343,33 @@ async def delete_file(file_path: str, authorization: str = Header(...)):
         )
 
     try:
-        bucket = get_bucket()
-        blob = bucket.blob(file_path)
-
-        if not blob.exists():
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="File not found",
-            )
-
-        blob.delete()
+        try:
+            bucket = get_bucket()
+            blob = bucket.blob(file_path)
+            if blob.exists():
+                blob.delete()
+            else:
+                local_path = (LOCAL_UPLOADS_ROOT / file_path).resolve()
+                if (
+                    not str(local_path).startswith(str(LOCAL_UPLOADS_ROOT))
+                    or not local_path.exists()
+                ):
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail="File not found",
+                    )
+                local_path.unlink()
+        except Exception:
+            local_path = (LOCAL_UPLOADS_ROOT / file_path).resolve()
+            if (
+                not str(local_path).startswith(str(LOCAL_UPLOADS_ROOT))
+                or not local_path.exists()
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="File not found",
+                )
+            local_path.unlink()
 
         return {
             "status": "success",

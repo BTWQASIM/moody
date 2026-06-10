@@ -137,19 +137,16 @@ export function EarlyWarningAlerts() {
                             ? "Acknowledged"
                             : "Pending"}
                         </p>
-                        <Button
-                          asChild
-                          size="sm"
-                          variant="ghost"
-                          className="h-7 gap-1 text-xs"
-                        >
-                          <Link
-                            href={`/patients/${alert.patientId}`}
+                        <Link href={`/patients/${alert.patientId}`}>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 gap-1 text-xs"
                           >
                             Review
                             <ArrowRight className="size-3.5" />
-                          </Link>
-                        </Button>
+                          </Button>
+                        </Link>
                       </div>
                     </div>
                   </div>

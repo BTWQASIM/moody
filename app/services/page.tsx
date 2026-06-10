@@ -18,21 +18,62 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
-import { services as initialServices, type Service } from "@/lib/data"
+import { useServices } from "@/lib/hooks"
+import { serviceAPI } from "@/lib/api"
 import { Plus, Clock, DollarSign, Tag, Stethoscope } from "lucide-react"
 
 export default function ServicesPage() {
-  const [services, setServices] = useState<Service[]>(initialServices)
+  const { data, loading, error } = useServices()
+  const [submitting, setSubmitting] = useState(false)
 
-  function toggle(id: string) {
-    setServices((prev) => prev.map((s) => (s.id === id ? { ...s, active: !s.active } : s)))
+  const services = (data || []) as Array<{
+    id: string
+    name: string
+    description: string
+    duration: number
+    price: number
+    isActive?: boolean
+    specialization?: string
+  }>
+
+  async function toggle(service: {
+    id: string
+    name: string
+    description: string
+    duration: number
+    price: number
+    isActive?: boolean
+  }) {
+    await serviceAPI.update(service.id, {
+      isActive: !service.isActive,
+    })
+    window.location.reload()
   }
 
   return (
     <PortalShell title="Services Management" subtitle="Define the therapy services you offer to patients">
       <div className="mb-4 flex justify-end">
-        <CreateServiceDialog onCreate={(s) => setServices((prev) => [...prev, s])} />
+        <CreateServiceDialog
+          busy={submitting}
+          onCreate={async (payload) => {
+            setSubmitting(true)
+            try {
+              await serviceAPI.create(payload)
+              window.location.reload()
+            } finally {
+              setSubmitting(false)
+            }
+          }}
+        />
       </div>
+
+      {loading && (
+        <Card className="p-6 text-sm text-muted-foreground">Loading services...</Card>
+      )}
+
+      {error && (
+        <Card className="p-6 text-sm text-destructive">Failed to load services.</Card>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {services.map((s) => (
@@ -41,7 +82,10 @@ export default function ServicesPage() {
               <div className="flex size-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
                 <Stethoscope className="size-5" />
               </div>
-              <Switch checked={s.active} onCheckedChange={() => toggle(s.id)} />
+              <Switch
+                checked={Boolean(s.isActive)}
+                onCheckedChange={() => void toggle(s)}
+              />
             </div>
             <h3 className="mt-3 font-semibold text-foreground">{s.name}</h3>
             <p className="mt-1 flex-1 text-sm leading-relaxed text-muted-foreground">{s.description}</p>
@@ -51,11 +95,11 @@ export default function ServicesPage() {
                 {s.duration} min
               </span>
               <span className="flex items-center gap-1.5">
-                <DollarSign className="size-3.5" />${s.fee}
+                <DollarSign className="size-3.5" />${s.price}
               </span>
               <Badge variant="outline" className="ml-auto gap-1">
                 <Tag className="size-3" />
-                {s.specialization}
+                {s.specialization || "General"}
               </Badge>
             </div>
           </Card>
@@ -65,20 +109,28 @@ export default function ServicesPage() {
   )
 }
 
-function CreateServiceDialog({ onCreate }: { onCreate: (s: Service) => void }) {
+function CreateServiceDialog({
+  onCreate,
+  busy,
+}: {
+  onCreate: (s: {
+    name: string
+    description: string
+    duration: number
+    price: number
+  }) => Promise<void>
+  busy: boolean
+}) {
   const [open, setOpen] = useState(false)
   const [form, setForm] = useState({ name: "", description: "", duration: "50", fee: "175", specialization: "" })
 
-  function submit() {
+  async function submit() {
     if (!form.name) return
-    onCreate({
-      id: `s${Date.now()}`,
+    await onCreate({
       name: form.name,
       description: form.description,
       duration: Number(form.duration),
-      fee: Number(form.fee),
-      specialization: form.specialization || "General",
-      active: true,
+      price: Number(form.fee),
     })
     setForm({ name: "", description: "", duration: "50", fee: "175", specialization: "" })
     setOpen(false)
@@ -86,12 +138,14 @@ function CreateServiceDialog({ onCreate }: { onCreate: (s: Service) => void }) {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
+      <DialogTrigger
+        render={
         <Button>
           <Plus className="size-4" />
           New Service
         </Button>
-      </DialogTrigger>
+      }
+      />
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Create New Service</DialogTitle>
@@ -150,7 +204,9 @@ function CreateServiceDialog({ onCreate }: { onCreate: (s: Service) => void }) {
           <Button variant="outline" onClick={() => setOpen(false)}>
             Cancel
           </Button>
-          <Button onClick={submit}>Create Service</Button>
+          <Button onClick={() => void submit()} disabled={busy}>
+            {busy ? "Creating..." : "Create Service"}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

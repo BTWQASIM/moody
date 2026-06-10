@@ -683,12 +683,14 @@ export default function AppointmentsPage() {
           </div>
 
           <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
-            <DialogTrigger asChild>
-              <Button>
-                <Plus className="size-4 mr-2" />
-                Schedule Appointment
-              </Button>
-            </DialogTrigger>
+            <DialogTrigger
+              render={
+                <Button>
+                  <Plus className="size-4 mr-2" />
+                  Schedule Appointment
+                </Button>
+              }
+            />
             <CreateAppointmentDialog
               open={createDialogOpen}
               onOpenChange={setCreateDialogOpen}

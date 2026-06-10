@@ -17,3 +17,6 @@ node_modules
 # Firebase Admin service account (never commit)
 backend/firebase-adminsdk.json
 **/firebase-adminsdk*.json
+
+# Local uploads (development)
+backend/local-uploads/

@@ -47,7 +47,7 @@ export default function LoginPage() {
       } else if (err.code === "auth/too-many-requests") {
         message = "Too many login attempts. Please try again later."
       } else if (err.code === "auth/invalid-credential") {
-        message = "Invalid email or password. Use an account from Firebase Console → Authentication → Users."
+        message = "Invalid email or password. Please check your credentials, register a new account, or reset your password."
       }
       
       setError(message)

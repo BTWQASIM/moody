@@ -21,6 +21,14 @@ class ServiceRequest(BaseModel):
     price: float
 
 
+class ServiceUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    duration: Optional[int] = None
+    price: Optional[float] = None
+    isActive: Optional[bool] = None
+
+
 def verify_token(authorization: str = Header(...)):
     """Verify Firebase ID token"""
     try:
@@ -98,7 +106,7 @@ async def create_service(
 @router.patch("/{service_id}")
 async def update_service(
     service_id: str,
-    request: ServiceRequest,
+    request: ServiceUpdateRequest,
     authorization: str = Header(...),
 ):
     """Update a service"""
@@ -115,7 +123,17 @@ async def update_service(
                 detail="Service not found",
             )
 
-        updates = request.model_dump()
+        updates = {
+            key: value
+            for key, value in request.model_dump().items()
+            if value is not None
+        }
+        if not updates:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No updates provided",
+            )
+
         db.update_service(service_id, updates)
 
         return {
