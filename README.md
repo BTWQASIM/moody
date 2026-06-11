@@ -1,106 +1,112 @@
-# Moody Therapist Portal (Web)
+# Ping My Therapist — Web Portal
 
-Next.js therapist dashboard with a FastAPI backend. Uses the **PingMyTherapist** Firebase project (`pingmytherapist`).
+Next.js therapist and admin portal with a FastAPI backend. Shares the **Ping My Therapist** Firebase project (`pingmytherapist`) with the Flutter mobile app.
+
+## What this repo includes
+
+- **Therapist portal** — dashboard, patients, appointments, messages, settings, availability
+- **Admin portal** — therapist approval, access control, notifications
+- **Backend API** — Firebase Auth verification, Firestore, file uploads, AI tasks (Celery + Redis)
+- **Mobile integration** — link portal patients to mobile Firebase UIDs; view mood check-ins and journal entries; accept/decline appointment requests from the app
 
 ## Prerequisites
 
 - **Node.js 20+** and **pnpm** (`npm install -g pnpm`)
-- **Python 3.11+** (only if running the backend locally without Docker)
-- **Docker Desktop** (optional — for Redis + backend via Compose)
-- Access to the [PingMyTherapist Firebase project](https://console.firebase.google.com/project/pingmytherapist)
+- **Python 3.11+** (local backend)
+- **Redis** (optional — required for AI background tasks)
+- **Docker Desktop** (optional — Redis + backend via Compose)
+- Access to the [Ping My Therapist Firebase project](https://console.firebase.google.com/project/pingmytherapist)
 
-## 1. Frontend only (UI + Firebase Auth)
+## Quick start
 
-From the `web` directory:
+### 1. Frontend
 
 ```bash
-cd "/Users/saifahmed/development/Ping My Therapist/web"
+cd web
 pnpm install
+cp .env.example .env.local
+# Edit .env.local with your Firebase web app config from Firebase Console
 pnpm dev
 ```
 
 Open **http://localhost:3000**
 
-Useful routes:
+| Route | Purpose |
+|-------|---------|
+| `/login` | Therapist / admin sign in |
+| `/register` | Therapist registration (pending admin approval) |
+| `/dashboard` | Therapist dashboard |
+| `/admin/dashboard` | Admin dashboard |
+| `/admin/therapists` | Approve or revoke therapist access |
+| `/appointments` | Manage and accept mobile appointment requests |
 
-| URL | Purpose |
-|-----|---------|
-| http://localhost:3000/login | Sign in |
-| http://localhost:3000/register | Therapist registration |
-| http://localhost:3000/dashboard | Main dashboard (requires login) |
-| http://localhost:3000/firebase-debug | Verify Firebase env + auth |
+Set `NEXT_PUBLIC_API_URL=http://localhost:8000` in `.env.local` when using the local backend.
 
-### Firebase env (frontend)
-
-`.env.local` must point at **PingMyTherapist**. To set it up:
-
-```bash
-cp .env.example .env.local
-# Fill in values from Firebase Console → Project Settings → Your apps → Web app config
-```
-
-Required variables: `NEXT_PUBLIC_FIREBASE_API_KEY`, `AUTH_DOMAIN`, `PROJECT_ID`, `STORAGE_BUCKET`, `MESSAGING_SENDER_ID`, `APP_ID`.
-
-### Firebase Console checklist
-
-In [Firebase Console → PingMyTherapist](https://console.firebase.google.com/project/pingmytherapist):
-
-1. **Authentication → Sign-in method** — enable **Email/Password** (and Anonymous if you use the debug page test)
-2. **Authentication → Settings → Authorized domains** — add `localhost`
-3. **Firestore** — create database if not already (same rules as mobile app)
-
-## 2. Full stack (frontend + backend + Redis)
-
-### Backend Firebase Admin (server-side)
-
-The API verifies Firebase ID tokens and writes to Firestore. You need a service account key:
-
-1. Firebase Console → **Project Settings → Service accounts**
-2. **Generate new private key** → save as `web/backend/firebase-adminsdk.json`
-3. Ensure `backend/.env` contains:
-
-```env
-FIREBASE_CREDENTIALS_PATH=./firebase-adminsdk.json
-FIREBASE_STORAGE_BUCKET=pingmytherapist.firebasestorage.app
-```
-
-`firebase-adminsdk.json` must **not** be committed (add to `.gitignore` if needed).
-
-### Option A — Docker (recommended)
+### 2. Backend
 
 ```bash
-cd "/Users/saifahmed/development/Ping My Therapist/web"
+cd web/backend
+cp .env.example .env
+# Place your service account JSON at backend/firebase-adminsdk.json
+python -m venv venv
+source venv/bin/activate   # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
+```
+
+Health check: **http://localhost:8000/health**
+
+Copy your Firebase service account key to `backend/firebase-adminsdk.json` (see `.env.example` for `FIREBASE_CREDENTIALS_PATH`). **Never commit this file.**
+
+### 3. Full stack (Docker + frontend)
+
+```bash
+cd web
 docker compose up --build
 ```
 
-Then in a second terminal:
+In a second terminal:
 
 ```bash
-cd "/Users/saifahmed/development/Ping My Therapist/web"
+cd web
 pnpm dev
 ```
 
 - Frontend: http://localhost:3000  
-- Backend health: http://localhost:8000/health  
+- Backend: http://localhost:8000  
 - Redis: localhost:6379  
 
-### Option B — Local Python backend
+## Firebase setup
+
+In [Firebase Console → pingmytherapist](https://console.firebase.google.com/project/pingmytherapist):
+
+1. **Authentication → Sign-in method** — enable **Email/Password**
+2. **Authentication → Authorized domains** — add `localhost` (and your production domain)
+3. **Firestore** — use the same database as the mobile app
+4. **Service account** — download JSON for the backend (Project Settings → Service accounts)
+
+### First admin (one-time)
 
 ```bash
-# Terminal 1 — Redis
-redis-server
-
-# Terminal 2 — Backend
-cd "/Users/saifahmed/development/Ping My Therapist/web/backend"
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt   # if present
-uvicorn app.main:app --reload --port 8000
-
-# Terminal 3 — Frontend
-cd "/Users/saifahmed/development/Ping My Therapist/web"
-pnpm dev
+cd web/backend
+# Set ADMIN_BOOTSTRAP_ENABLED=true and ADMIN_BOOTSTRAP_SECRET in .env
+python scripts/bootstrap_admin.py --email admin@example.com
+# Then set ADMIN_BOOTSTRAP_ENABLED=false again
 ```
+
+Seed demo therapists (optional):
+
+```bash
+cd web/backend
+python scripts/seed_therapists.py
+```
+
+## Therapist approval flow
+
+1. Therapist registers at `/register` (profile, credentials, weekly availability)
+2. Account is created with `verified: false` / `pending_verification`
+3. Admin approves at `/admin/therapists`
+4. Approved therapists can sign in and appear in the **mobile app** therapist list
 
 ## Production build
 
@@ -109,17 +115,36 @@ pnpm build
 pnpm start
 ```
 
-Runs on http://localhost:3000 by default.
-
 ## Project structure
 
 ```
 web/
-├── app/              # Next.js App Router pages
-├── components/       # UI components (shadcn)
+├── app/                 # Next.js App Router (therapist + admin + auth)
+├── components/          # UI components
 ├── lib/
-│   ├── firebase.ts   # Client Firebase init (Auth, Firestore, Storage)
-│   ├── api.ts        # Backend API client (sends Firebase ID tokens)
-│   └── hooks.ts      # React hooks for API calls
-└── backend/          # FastAPI + Celery + Firebase Admin
+│   ├── firebase.ts      # Client Firebase (Auth, Firestore, Storage)
+│   ├── api.ts           # Backend API client
+│   ├── hooks.ts         # React data hooks
+│   └── availability.ts  # Shared therapist availability format
+└── backend/
+    ├── app/             # FastAPI routes and Firestore DAO
+    └── scripts/         # Seed and bootstrap utilities
 ```
+
+## Do not commit
+
+These are gitignored — keep them local only:
+
+| Path | Purpose |
+|------|---------|
+| `.env.local` | Frontend secrets and Firebase web config |
+| `backend/.env` | Backend environment variables |
+| `backend/firebase-adminsdk.json` | Firebase Admin service account |
+| `backend/venv/` | Python virtual environment |
+| `node_modules/`, `.next/` | Frontend build artifacts |
+
+See `.gitignore` for the full list.
+
+## Related repos
+
+The **Flutter mobile app** lives in the parent `Ping My Therapist` repository (separate git repo). Patients book sessions and submit mood/journal data there; this portal reads and manages that linked data.
