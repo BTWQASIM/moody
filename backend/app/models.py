@@ -19,6 +19,11 @@ class TherapistStatus(str, Enum):
     INACTIVE = "inactive"
 
 
+class UserRole(str, Enum):
+    ADMIN = "admin"
+    THERAPIST = "therapist"
+
+
 class PatientStatus(str, Enum):
     ACTIVE = "active"
     INACTIVE = "inactive"
@@ -54,6 +59,7 @@ class MoodEntryStatus(str, Enum):
 
 class TherapistProfile(BaseModel):
     uid: str
+    role: UserRole = UserRole.THERAPIST
     name: str
     email: str
     phone: str
@@ -67,6 +73,7 @@ class TherapistProfile(BaseModel):
     verifiedAt: Optional[datetime] = None
     profilePhoto: Optional[str] = None  # URL to Firebase Storage
     documentUrls: List[str] = Field(default_factory=list)  # License, certifications
+    availability: List[dict] = Field(default_factory=list)
     createdAt: datetime = Field(default_factory=datetime.utcnow)
     updatedAt: datetime = Field(default_factory=datetime.utcnow)
 

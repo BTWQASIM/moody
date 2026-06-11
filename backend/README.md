@@ -26,4 +26,30 @@ cd backend
 python scripts/seed_firebase.py
 ```
 
+Bootstrap first admin (one-time):
+
+1. In `backend/.env`, set:
+
+```env
+ADMIN_BOOTSTRAP_ENABLED=true
+ADMIN_BOOTSTRAP_SECRET=<strong-random-secret>
+```
+
+2. Run one of:
+
+```bash
+cd backend
+python scripts/bootstrap_admin.py --email admin@example.com
+# or
+python scripts/bootstrap_admin.py --uid <firebase-auth-uid>
+```
+
+3. After success, disable bootstrap again:
+
+```env
+ADMIN_BOOTSTRAP_ENABLED=false
+```
+
+The endpoint can only be used once and is automatically locked after first success.
+
 Next steps: design database schema, add auth, and implement API routes.

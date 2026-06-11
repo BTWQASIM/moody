@@ -1,13 +1,41 @@
 "use client"
 
-import { ReactNode } from "react"
+import { ReactNode, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { useAuth } from "@/app/providers"
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 
-export function ProtectedRoute({ children }: { children: ReactNode }) {
+type Role = "admin" | "therapist"
+
+export function ProtectedRoute({
+  children,
+  allowedRoles = ["therapist"],
+  requireVerified = true,
+}: {
+  children: ReactNode
+  allowedRoles?: Role[]
+  requireVerified?: boolean
+}) {
   const router = useRouter()
-  const { user, loading } = useAuth()
+  const { user, loading, role, verified } = useAuth()
+
+  let redirectTo: string | null = null
+
+  if (!loading) {
+    if (!user) {
+      redirectTo = "/login"
+    } else if (role && !allowedRoles.includes(role)) {
+      redirectTo = role === "admin" ? "/admin/dashboard" : "/dashboard"
+    } else if (requireVerified && role === "therapist" && !verified) {
+      redirectTo = "/login"
+    }
+  }
+
+  useEffect(() => {
+    if (redirectTo) {
+      router.replace(redirectTo)
+    }
+  }, [redirectTo, router])
 
   if (loading) {
     return (
@@ -22,8 +50,7 @@ export function ProtectedRoute({ children }: { children: ReactNode }) {
     )
   }
 
-  if (!user) {
-    router.push("/login")
+  if (redirectTo) {
     return null
   }
 

@@ -27,7 +27,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
             {[
               { icon: Activity, text: "Proactive risk monitoring across your caseload" },
               { icon: Sparkles, text: "AI-generated clinical summaries from any source" },
-              { icon: ShieldCheck, text: "AES-256 encryption with HIPAA-inspired audit logs" },
+              { icon: ShieldCheck, text: "Secure workflows built for mental health teams" },
             ].map((f) => (
               <li key={f.text} className="flex items-center gap-3 text-sm text-primary-foreground/90">
                 <span className="flex size-8 items-center justify-center rounded-lg bg-primary-foreground/15">

@@ -5,6 +5,8 @@ import { usePathname } from "next/navigation"
 import {
   LayoutDashboard,
   Users,
+  UserCheck,
+  Shield,
   Sparkles,
   CalendarDays,
   Stethoscope,
@@ -15,8 +17,9 @@ import {
   HeartPulse,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { useAuth } from "@/app/providers"
 
-const nav = [
+const therapistNav = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/patients", label: "Patients", icon: Users },
   { href: "/ai-assistant", label: "AI Clinical Assistant", icon: Sparkles },
@@ -28,8 +31,16 @@ const nav = [
   { href: "/settings", label: "Settings", icon: Settings },
 ]
 
+const adminNav = [
+  { href: "/admin/dashboard", label: "Admin Dashboard", icon: Shield },
+  { href: "/admin/therapists", label: "Therapist Access", icon: UserCheck },
+  { href: "/admin/settings", label: "Settings", icon: Settings },
+]
+
 export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname()
+  const { role } = useAuth()
+  const nav = role === "admin" ? adminNav : therapistNav
 
   return (
     <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
@@ -75,7 +86,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           <p className="text-xs font-semibold">Secure session active</p>
         </div>
         <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
-          AES-256 encrypted. HIPAA-inspired audit logging enabled.
+          Session protection is active.
         </p>
       </div>
     </div>

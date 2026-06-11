@@ -3,13 +3,13 @@
 import { useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { Eye, EyeOff, Lock, Mail, ShieldCheck } from "lucide-react"
+import { Eye, EyeOff, Lock, Mail } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { HeartPulse } from "lucide-react"
-import { signInWithEmailAndPassword } from "firebase/auth"
+import { signInWithEmailAndPassword, signOut } from "firebase/auth"
 import { auth } from "@/lib/firebase"
 
 export default function LoginPage() {
@@ -28,8 +28,46 @@ export default function LoginPage() {
     const password = formData.get("password") as string
 
     try {
-      await signInWithEmailAndPassword(auth, email, password)
-      router.push("/dashboard")
+      const credential = await signInWithEmailAndPassword(auth, email, password)
+      const tokenResult = await credential.user.getIdTokenResult(true)
+      const token = tokenResult.token
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+
+      let role = tokenResult.claims.role === "admin" ? "admin" : "therapist"
+      let verified = Boolean(tokenResult.claims.verified)
+      let accessStatus = verified ? "verified" : "pending_verification"
+
+      try {
+        const accessRes = await fetch(`${baseUrl}/api/auth/access-status`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        })
+
+        if (accessRes.ok) {
+          const accessData = await accessRes.json()
+          role = accessData?.access?.role === "admin" ? "admin" : "therapist"
+          verified = Boolean(accessData?.access?.verified)
+          accessStatus = String(
+            accessData?.access?.status || (verified ? "verified" : "pending_verification")
+          ).toLowerCase()
+        }
+      } catch {
+        // Fall back to token claims if backend access status check fails.
+      }
+
+      if (role === "therapist" && !verified) {
+        await signOut(auth)
+        if (["suspended", "revoked", "inactive"].includes(accessStatus)) {
+          setError("Your therapist access has been revoked. Please contact the administrator for assistance.")
+        } else {
+          setError("Your account is pending admin verification. You will be able to sign in after approval.")
+        }
+        setLoading(false)
+        return
+      }
+
+      router.push(role === "admin" ? "/admin/dashboard" : "/dashboard")
     } catch (err: any) {
       // Map Firebase error codes to user-friendly messages
       let message = err.message || "Failed to sign in. Check your credentials."
@@ -131,10 +169,6 @@ export default function LoginPage() {
               Remember this device
             </Label>
           </div>
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-success/10 px-2.5 py-1 text-xs font-medium text-success">
-            <ShieldCheck className="size-3.5" />
-            2FA Ready
-          </span>
         </div>
 
         <Button type="submit" className="w-full" size="lg" disabled={loading}>

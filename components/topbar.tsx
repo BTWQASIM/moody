@@ -1,8 +1,8 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { FormEvent, useEffect, useMemo, useState } from "react"
 import { Search, Bell, Menu } from "lucide-react"
-import { useRouter } from "next/navigation"
+import { usePathname, useRouter } from "next/navigation"
 import { signOut } from "firebase/auth"
 import { useAuth } from "@/app/providers"
 import { Input } from "@/components/ui/input"
@@ -51,8 +51,11 @@ function resolveProfilePhotoUrl(photo: string | undefined, fallback: string) {
 
 export function Topbar({ title, subtitle }: { title: string; subtitle?: string }) {
   const router = useRouter()
-  const { user } = useAuth()
+  const pathname = usePathname()
+  const { user, role, verified } = useAuth()
   const [profile, setProfile] = useState<TherapistProfile | null>(null)
+  const [searchQuery, setSearchQuery] = useState("")
+  const [unreadCount, setUnreadCount] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -90,10 +93,51 @@ export function Topbar({ title, subtitle }: { title: string; subtitle?: string }
     return () => {
       cancelled = true
     }
-  }, [user])
+  }, [user, pathname])
 
-  const displayName = profile?.name || user?.displayName || "Therapist"
-  const displayTitle = profile?.title || "Licensed Therapist"
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadUnread() {
+      if (!user) {
+        setUnreadCount(0)
+        return
+      }
+
+      try {
+        const idToken = await user.getIdToken()
+        const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+        const response = await fetch(`${apiBase}/api/notifications/`, {
+          headers: {
+            Authorization: `Bearer ${idToken}`,
+          },
+        })
+
+        if (!response.ok) {
+          throw new Error("Failed to load notifications")
+        }
+
+        const result = await response.json()
+        if (!cancelled) {
+          setUnreadCount(Number(result?.unreadCount || 0))
+        }
+      } catch {
+        if (!cancelled) {
+          setUnreadCount(0)
+        }
+      }
+    }
+
+    loadUnread()
+    return () => {
+      cancelled = true
+    }
+  }, [user, pathname])
+
+  const displayName = role === "admin"
+    ? user?.displayName || profile?.name || "Admin"
+    : profile?.name || user?.displayName || "Therapist"
+  const displayTitle = role === "admin" ? "System Administrator" : profile?.title || "Licensed Therapist"
   const displayEmail = profile?.email || user?.email || ""
   const displayAvatar = resolveProfilePhotoUrl(
     profile?.profilePhoto,
@@ -110,6 +154,29 @@ export function Topbar({ title, subtitle }: { title: string; subtitle?: string }
     await signOut(auth)
     router.push("/login")
   }
+
+  function handleSearchSubmit(event: FormEvent) {
+    event.preventDefault()
+    const term = searchQuery.trim()
+
+    if (!term) {
+      if (role === "admin") {
+        router.push("/admin/therapists")
+      }
+      return
+    }
+
+    if (role === "admin") {
+      router.push(`/admin/therapists?q=${encodeURIComponent(term)}`)
+    }
+  }
+
+  const searchPlaceholder = useMemo(() => {
+    if (role === "admin") {
+      return "Search therapists by name, email, phone..."
+    }
+    return "Search patients, notes..."
+  }, [role])
 
   return (
     <header className="sticky top-0 z-30 flex items-center gap-3 border-b border-border bg-background/80 px-4 py-3 backdrop-blur-md md:px-6">
@@ -133,10 +200,15 @@ export function Topbar({ title, subtitle }: { title: string; subtitle?: string }
         {subtitle ? <p className="hidden truncate text-sm text-muted-foreground sm:block">{subtitle}</p> : null}
       </div>
 
-      <div className="relative hidden lg:block">
+      <form className="relative hidden lg:block" onSubmit={handleSearchSubmit}>
         <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-        <Input placeholder="Search patients, notes..." className="w-64 bg-card pl-9" />
-      </div>
+        <Input
+          placeholder={searchPlaceholder}
+          className="w-72 bg-card pl-9"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+        />
+      </form>
 
       <Button
         type="button"
@@ -146,7 +218,7 @@ export function Topbar({ title, subtitle }: { title: string; subtitle?: string }
         onClick={() => router.push("/notifications")}
       >
         <Bell className="size-5" />
-        <span className="absolute right-1.5 top-1.5 size-2 rounded-full bg-destructive" />
+        {unreadCount > 0 ? <span className="absolute right-1.5 top-1.5 size-2 rounded-full bg-destructive" /> : null}
         <span className="sr-only">Notifications</span>
       </Button>
 
@@ -174,8 +246,17 @@ export function Topbar({ title, subtitle }: { title: string; subtitle?: string }
               <div className="space-y-1">
                 <div className="flex items-center justify-between">
                   <span>My Account</span>
-                  <Badge variant="outline" className="border-success/30 bg-success/10 text-success">
-                    Verified
+                  <Badge
+                    variant="outline"
+                    className={
+                      role === "admin"
+                        ? "border-primary/30 bg-primary/10 text-primary"
+                        : verified
+                          ? "border-success/30 bg-success/10 text-success"
+                          : "border-warning/30 bg-warning/10 text-warning"
+                    }
+                  >
+                    {role === "admin" ? "Admin" : verified ? "Verified" : "Pending"}
                   </Badge>
                 </div>
                 {displayEmail ? <p className="text-xs text-muted-foreground">{displayEmail}</p> : null}
@@ -183,9 +264,9 @@ export function Topbar({ title, subtitle }: { title: string; subtitle?: string }
             </DropdownMenuLabel>
           </DropdownMenuGroup>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={() => router.push("/settings")}>Profile &amp; Settings</DropdownMenuItem>
-          <DropdownMenuItem onClick={() => router.push("/settings")}>Availability</DropdownMenuItem>
-          <DropdownMenuItem onClick={() => router.push("/settings")}>Security</DropdownMenuItem>
+          <DropdownMenuItem onClick={() => router.push(role === "admin" ? "/admin/settings" : "/settings")}>Profile &amp; Settings</DropdownMenuItem>
+          <DropdownMenuItem onClick={() => router.push(role === "admin" ? "/admin/settings" : "/settings")}>Availability</DropdownMenuItem>
+          <DropdownMenuItem onClick={() => router.push(role === "admin" ? "/admin/settings" : "/settings")}>Security</DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem className="text-destructive" onClick={handleSignOut}>Sign out</DropdownMenuItem>
         </DropdownMenuContent>

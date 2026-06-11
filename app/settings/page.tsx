@@ -13,9 +13,23 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Smartphone, Laptop, Monitor, ShieldCheck, KeyRound, Loader2 } from "lucide-react"
+import { Smartphone, Laptop, Monitor, ShieldCheck, Loader2 } from "lucide-react"
 
 const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+type DayAvailability = {
+  day: string
+  enabled: boolean
+  start: string
+  end: string
+}
+
+const defaultAvailability: DayAvailability[] = days.map((day, index) => ({
+  day,
+  enabled: index < 5,
+  start: "09:00",
+  end: "17:00",
+}))
 
 type ProfileForm = {
   name: string
@@ -29,7 +43,7 @@ type ProfileForm = {
 
 export default function SettingsPage() {
   return (
-    <ProtectedRoute>
+    <ProtectedRoute allowedRoles={["therapist"]} requireVerified>
       <SettingsContent />
     </ProtectedRoute>
   )
@@ -40,7 +54,9 @@ function SettingsContent() {
   const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
   const [loadingProfile, setLoadingProfile] = useState(true)
   const [savingProfile, setSavingProfile] = useState(false)
+  const [savingAvailability, setSavingAvailability] = useState(false)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
+  const [availabilityMessage, setAvailabilityMessage] = useState<string | null>(null)
   const [profileForm, setProfileForm] = useState<ProfileForm>({
     name: "",
     email: "",
@@ -50,6 +66,7 @@ function SettingsContent() {
     profilePhoto: "",
     bio: "",
   })
+  const [availability, setAvailability] = useState<DayAvailability[]>(defaultAvailability)
 
   useEffect(() => {
     let cancelled = false
@@ -90,6 +107,18 @@ function SettingsContent() {
           profilePhoto: (data.profilePhoto as string) || user.photoURL || "",
           bio: (data.bio as string) || "",
         })
+
+        const availabilityData = Array.isArray(data.availability) ? data.availability : []
+        const normalizedAvailability = days.map((day, index) => {
+          const fromDb = availabilityData.find((entry: any) => entry?.day === day)
+          return {
+            day,
+            enabled: Boolean(fromDb?.enabled ?? index < 5),
+            start: typeof fromDb?.start === "string" ? fromDb.start : "09:00",
+            end: typeof fromDb?.end === "string" ? fromDb.end : "17:00",
+          }
+        })
+        setAvailability(normalizedAvailability)
       } catch {
         if (!cancelled) {
           setSaveMessage("Could not load your profile data.")
@@ -146,6 +175,43 @@ function SettingsContent() {
     } finally {
       setSavingProfile(false)
     }
+  }
+
+  async function handleSaveAvailability() {
+    if (!user) return
+    setSavingAvailability(true)
+    setAvailabilityMessage(null)
+
+    try {
+      const idToken = await user.getIdToken()
+
+      const response = await fetch(`${apiBaseUrl}/api/auth/profile`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({
+          availability,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error("Failed to save availability")
+      }
+
+      setAvailabilityMessage("Availability saved successfully.")
+    } catch {
+      setAvailabilityMessage("Failed to save availability. Please try again.")
+    } finally {
+      setSavingAvailability(false)
+    }
+  }
+
+  function updateAvailability(day: string, patch: Partial<DayAvailability>) {
+    setAvailability((prev) =>
+      prev.map((entry) => (entry.day === day ? { ...entry, ...patch } : entry)),
+    )
   }
 
   const avatarName = profileForm.name || user?.displayName || "Therapist"
@@ -282,17 +348,50 @@ function SettingsContent() {
               <p className="text-sm text-muted-foreground">Set your weekly working hours for patient bookings</p>
             </CardHeader>
             <CardContent className="space-y-3">
-              {days.map((d, i) => (
-                <div key={d} className="flex items-center gap-4 rounded-lg border border-border p-3">
-                  <Switch defaultChecked={i < 5} />
-                  <span className="w-28 text-sm font-medium text-foreground">{d}</span>
+              {availabilityMessage ? (
+                <p className="rounded-md bg-muted px-3 py-2 text-sm text-foreground">{availabilityMessage}</p>
+              ) : null}
+
+              {availability.map((entry) => (
+                <div key={entry.day} className="flex items-center gap-4 rounded-lg border border-border p-3">
+                  <Switch
+                    checked={entry.enabled}
+                    onCheckedChange={(checked) => updateAvailability(entry.day, { enabled: Boolean(checked) })}
+                    disabled={loadingProfile || savingAvailability}
+                  />
+                  <span className="w-28 text-sm font-medium text-foreground">{entry.day}</span>
                   <div className="flex flex-1 items-center gap-2">
-                    <Input defaultValue="09:00" className="w-28" disabled={i >= 5} />
+                    <Input
+                      type="time"
+                      value={entry.start}
+                      onChange={(e) => updateAvailability(entry.day, { start: e.target.value })}
+                      className="w-28"
+                      disabled={!entry.enabled || loadingProfile || savingAvailability}
+                    />
                     <span className="text-muted-foreground">to</span>
-                    <Input defaultValue="17:00" className="w-28" disabled={i >= 5} />
+                    <Input
+                      type="time"
+                      value={entry.end}
+                      onChange={(e) => updateAvailability(entry.day, { end: e.target.value })}
+                      className="w-28"
+                      disabled={!entry.enabled || loadingProfile || savingAvailability}
+                    />
                   </div>
                 </div>
               ))}
+
+              <div className="flex justify-end">
+                <Button onClick={handleSaveAvailability} disabled={!user || loadingProfile || savingAvailability}>
+                  {savingAvailability ? (
+                    <>
+                      <Loader2 className="mr-2 size-4 animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    "Save availability"
+                  )}
+                </Button>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
@@ -314,40 +413,19 @@ function SettingsContent() {
         </TabsContent>
 
         <TabsContent value="security" className="mt-4">
-          <div className="grid gap-4 lg:grid-cols-2">
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Change Password</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <Field label="Current Password" value="" type="password" placeholder="••••••••" />
-                <Field label="New Password" value="" type="password" placeholder="••••••••" />
-                <Field label="Confirm New Password" value="" type="password" placeholder="••••••••" />
-                <div className="flex justify-end">
-                  <Button>Update password</Button>
-                </div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Two-Factor Authentication</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex items-center justify-between rounded-lg border border-success/30 bg-success/5 p-4">
-                  <div className="flex items-center gap-3">
-                    <KeyRound className="size-5 text-success" />
-                    <div>
-                      <p className="text-sm font-medium text-foreground">Authenticator App</p>
-                      <p className="text-xs text-muted-foreground">2FA is currently enabled</p>
-                    </div>
-                  </div>
-                  <Switch defaultChecked />
-                </div>
-                <Toggle label="Login alerts" detail="Notify me of new sign-ins" on />
-                <Toggle label="Audit log access" detail="HIPAA-inspired activity logging" on />
-              </CardContent>
-            </Card>
-          </div>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Change Password</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <Field label="Current Password" value="" type="password" placeholder="••••••••" />
+              <Field label="New Password" value="" type="password" placeholder="••••••••" />
+              <Field label="Confirm New Password" value="" type="password" placeholder="••••••••" />
+              <div className="flex justify-end">
+                <Button>Update password</Button>
+              </div>
+            </CardContent>
+          </Card>
         </TabsContent>
 
         <TabsContent value="devices" className="mt-4">

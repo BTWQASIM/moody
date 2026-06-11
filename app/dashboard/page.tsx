@@ -65,6 +65,7 @@ function DashboardContent() {
   }, [patients, appointments, alerts])
 
   const isLoading = patientsLoading || appointmentsLoading || alertsLoading
+  const displayName = user?.displayName?.trim() || user?.email?.split("@")[0] || "Therapist"
 
   const StatCardSkeleton = () => (
     <div className="space-y-3 rounded-lg border p-4">
@@ -79,7 +80,7 @@ function DashboardContent() {
 
   return (
     <PortalShell
-      title={`Welcome back, ${user?.email?.split("@")[0] || "Therapist"}`}
+      title={`Welcome back, ${displayName}`}
       subtitle="Here's your clinical overview for today"
     >
       {stats.criticalAlerts > 0 && (
@@ -166,7 +167,7 @@ function DashboardContent() {
 
 export default function DashboardPage() {
   return (
-    <ProtectedRoute>
+    <ProtectedRoute allowedRoles={["therapist"]} requireVerified>
       <DashboardContent />
     </ProtectedRoute>
   )
