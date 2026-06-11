@@ -19,6 +19,8 @@ from app.models import (
     MessageThread,
     Notification,
     AuditLog,
+    MobileMoodCheckin,
+    MobileJournalEntry,
 )
 
 
@@ -114,7 +116,10 @@ class FirestoreDAO:
         if not self.db:
             return None
         doc = self.db.collection("patients").document(patient_id).get()
-        return self._doc_data(doc)
+        data = self._doc_data(doc)
+        if data is not None:
+            data["id"] = patient_id
+        return data
 
     def get_patients_for_therapist(self, therapist_uid: str) -> List[Dict[str, Any]]:
         """Get all patients for a therapist"""
@@ -125,14 +130,23 @@ class FirestoreDAO:
             .where("therapistUid", "==", therapist_uid)
             .stream()
         )
-        return self._stream_data(docs)
+        rows: List[Dict[str, Any]] = []
+        for doc in docs:
+            data = cast(Any, doc).to_dict()
+            if not isinstance(data, dict):
+                continue
+            data["id"] = cast(Any, doc).id
+            rows.append(data)
+        return rows
 
     def create_patient(self, profile: PatientProfile) -> str:
         """Create a new patient profile"""
         if not self.db:
             raise Exception("Firestore not configured")
         doc_ref = self.db.collection("patients").add(profile.model_dump(by_alias=False))
-        return doc_ref[1].id
+        patient_id = doc_ref[1].id
+        doc_ref[1].update({"id": patient_id})
+        return patient_id
 
     def update_patient(self, patient_id: str, updates: Dict[str, Any]) -> bool:
         """Update patient profile"""
@@ -156,6 +170,39 @@ class FirestoreDAO:
     # Appointment Operations
     # ========================================================================
 
+    def _therapist_uid_aliases(self, therapist_uid: str) -> set[str]:
+        """Collect all identifiers that may appear as appointments.therapistUid.
+
+        Mobile app historically stored therapist Firestore doc IDs (e.g. TP_001)
+        while the portal authenticates with Firebase Auth UIDs. Include both.
+        """
+        aliases: set[str] = {therapist_uid}
+        if not self.db:
+            return aliases
+
+        doc = self.db.collection("therapists").document(therapist_uid).get()
+        if doc.exists:
+            data = doc.to_dict() or {}
+            aliases.add(doc.id)
+            profile_uid = data.get("uid")
+            if isinstance(profile_uid, str) and profile_uid:
+                aliases.add(profile_uid)
+
+        matches = (
+            self.db.collection("therapists")
+            .where("uid", "==", therapist_uid)
+            .stream()
+        )
+        for match in matches:
+            aliases.add(cast(Any, match).id)
+            data = cast(Any, match).to_dict()
+            if isinstance(data, dict):
+                profile_uid = data.get("uid")
+                if isinstance(profile_uid, str) and profile_uid:
+                    aliases.add(profile_uid)
+
+        return aliases
+
     def get_appointment(self, appointment_id: str) -> Optional[Dict[str, Any]]:
         """Get an appointment by ID"""
         if not self.db:
@@ -169,12 +216,19 @@ class FirestoreDAO:
         """Get appointments for a therapist"""
         if not self.db:
             return []
-        docs = (
-            self.db.collection("appointments")
-            .where("therapistUid", "==", therapist_uid)
-            .stream()
-        )
-        rows = self._stream_data(docs)
+
+        aliases = self._therapist_uid_aliases(therapist_uid)
+        docs = self.db.collection("appointments").stream()
+        rows: List[Dict[str, Any]] = []
+        for doc in docs:
+            data = cast(Any, doc).to_dict()
+            if not isinstance(data, dict):
+                continue
+            if data.get("therapistUid") not in aliases:
+                continue
+            data["id"] = cast(Any, doc).id
+            rows.append(data)
+
         if start_date:
             threshold = self._scheduled_at_epoch(start_date)
             rows = [
@@ -430,3 +484,89 @@ class FirestoreDAO:
             raise Exception("Firestore not configured")
         doc_ref = self.db.collection("auditLogs").add(log.model_dump(by_alias=False))
         return doc_ref[1].id
+
+    # ========================================================================
+    # Mobile App Data — read-only access for the therapist portal
+    # These collections are written directly by the Flutter patient app.
+    # ========================================================================
+
+    def get_mobile_user_profile(
+        self, firebase_uid: str
+    ) -> Optional[Dict[str, Any]]:
+        """Return the mobile app user profile from users/{firebase_uid}."""
+        if not self.db:
+            return None
+        doc = self.db.collection("users").document(firebase_uid).get()
+        return self._doc_data(doc)
+
+    def get_mobile_mood_checkins(
+        self, firebase_uid: str, limit: int = 30
+    ) -> List[Dict[str, Any]]:
+        """Return recent mood check-ins for a patient identified by Firebase UID."""
+        if not self.db:
+            return []
+        docs = (
+            self.db.collection("mood_checkins")
+            .where("userId", "==", firebase_uid)
+            .stream()
+        )
+        rows: List[Dict[str, Any]] = []
+        for doc in docs:
+            data = cast(Any, doc).to_dict()
+            if not isinstance(data, dict):
+                continue
+            data["id"] = cast(Any, doc).id
+            rows.append(data)
+        rows = self._sort_by_datetime_field(rows, "timestamp", reverse=True)
+        return rows[:limit]
+
+    def get_mobile_journal_entries(
+        self, firebase_uid: str, limit: int = 30
+    ) -> List[Dict[str, Any]]:
+        """Return recent journal entries for a patient identified by Firebase UID.
+
+        Queries the `journal_entries` collection (written by the Flutter app)
+        where `userId == firebase_uid`.
+        """
+        if not self.db:
+            return []
+        docs = (
+            self.db.collection("journal_entries")
+            .where("userId", "==", firebase_uid)
+            .stream()
+        )
+        rows: List[Dict[str, Any]] = []
+        for doc in docs:
+            data = cast(Any, doc).to_dict()
+            if not isinstance(data, dict):
+                continue
+            data["id"] = cast(Any, doc).id
+            rows.append(data)
+        rows = self._sort_by_datetime_field(rows, "timestamp", reverse=True)
+        return rows[:limit]
+
+    def link_patient_firebase_uid(
+        self, patient_id: str, firebase_uid: str
+    ) -> bool:
+        """Store the patient's Firebase Auth UID on their portal `patients` document.
+
+        This is the bridge between the mobile app user and the portal patient
+        record. Once set, the portal can query mobile-side collections by UID.
+        """
+        if not self.db:
+            return False
+        self.db.collection("patients").document(patient_id).update({
+            "firebaseUid": firebase_uid,
+            "updatedAt": datetime.utcnow(),
+        })
+        return True
+
+    def unlink_patient_firebase_uid(self, patient_id: str) -> bool:
+        """Remove the Firebase UID link from a patient's portal document."""
+        if not self.db:
+            return False
+        self.db.collection("patients").document(patient_id).update({
+            "firebaseUid": None,
+            "updatedAt": datetime.utcnow(),
+        })
+        return True

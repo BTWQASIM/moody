@@ -14,6 +14,65 @@ from app.firebase import get_auth_client, get_db_client
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
+WEEKDAYS = [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+]
+
+
+def _day_name_to_day_of_week(day: str) -> int:
+    try:
+        index = WEEKDAYS.index(day)
+    except ValueError:
+        return 0
+    return 0 if index == 6 else index + 1
+
+
+def _normalize_availability(
+    raw: Optional[List[Dict[str, Any]]],
+) -> Optional[List[Dict[str, Any]]]:
+    """Store availability in mobile-compatible format for patient booking."""
+    if not raw:
+        return None
+
+    normalized: List[Dict[str, Any]] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+
+        if "dayOfWeek" in entry:
+            start = entry.get("startTime") or entry.get("start") or "09:00"
+            end = entry.get("endTime") or entry.get("end") or "17:00"
+            normalized.append(
+                {
+                    "dayOfWeek": int(entry.get("dayOfWeek", 0)),
+                    "startTime": start,
+                    "endTime": end,
+                }
+            )
+            continue
+
+        if "day" in entry and not entry.get("enabled", True):
+            continue
+
+        if "day" in entry:
+            start = entry.get("start") or entry.get("startTime") or "09:00"
+            end = entry.get("end") or entry.get("endTime") or "17:00"
+            normalized.append(
+                {
+                    "dayOfWeek": _day_name_to_day_of_week(str(entry.get("day", ""))),
+                    "startTime": start,
+                    "endTime": end,
+                }
+            )
+
+    return normalized or None
+
 
 class SetClaimsRequest(BaseModel):
     uid: str
@@ -199,7 +258,7 @@ async def set_custom_claims(request: SetClaimsRequest, authorization: str = Head
             "specializations": request.specializations,
             "profilePhoto": request.profilePhoto,
             "documentUrls": request.documentUrls,
-            "availability": request.availability,
+            "availability": _normalize_availability(request.availability),
             "status": request.status or ("verified" if request.verified else "pending_verification"),
             "verified": request.verified,
             "updatedAt": datetime.utcnow().isoformat(),
@@ -685,6 +744,8 @@ async def update_my_profile(
         for key, value in request.model_dump().items()
         if value is not None
     }
+    if "availability" in updates:
+        updates["availability"] = _normalize_availability(updates["availability"])
     updates["updatedAt"] = datetime.utcnow().isoformat()
     is_admin = _is_admin(decoded, db_client)
     target_collection = "admins" if is_admin else "therapists"

@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef } from "react"
+import { ProtectedRoute } from "@/app/protected-route"
 import { PortalShell } from "@/components/portal-shell"
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -498,6 +499,14 @@ function CreateThreadDialog({ onComplete }: { onComplete: () => void }) {
 // ============================================================================
 
 export default function MessagesPage() {
+  return (
+    <ProtectedRoute allowedRoles={["therapist"]} requireVerified>
+      <MessagesPageContent />
+    </ProtectedRoute>
+  )
+}
+
+function MessagesPageContent() {
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
 

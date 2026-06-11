@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import { ProtectedRoute } from "@/app/protected-route"
 import { PortalShell } from "@/components/portal-shell"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -23,6 +24,14 @@ import { serviceAPI } from "@/lib/api"
 import { Plus, Clock, DollarSign, Tag, Stethoscope } from "lucide-react"
 
 export default function ServicesPage() {
+  return (
+    <ProtectedRoute allowedRoles={["therapist"]} requireVerified>
+      <ServicesPageContent />
+    </ProtectedRoute>
+  )
+}
+
+function ServicesPageContent() {
   const { data, loading, error } = useServices()
   const [submitting, setSubmitting] = useState(false)
 

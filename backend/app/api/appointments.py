@@ -66,9 +66,9 @@ async def list_appointments(
 
         if patient_id:
             appointments = db.get_appointments_for_patient(patient_id)
-            # Filter to only appointments for this therapist's patient
+            aliases = db._therapist_uid_aliases(therapist_uid)
             appointments = [
-                a for a in appointments if a.get("therapistUid") == therapist_uid
+                a for a in appointments if a.get("therapistUid") in aliases
             ]
         else:
             appointments = db.get_appointments_for_therapist(therapist_uid, start_dt)
@@ -98,8 +98,9 @@ async def get_appointment(appointment_id: str, authorization: str = Header(...))
                 detail="Appointment not found",
             )
 
-        # Verify therapist owns this appointment
-        if appointment.get("therapistUid") != decoded.get("uid"):
+        therapist_uid = decoded.get("uid")
+        aliases = db._therapist_uid_aliases(therapist_uid)
+        if appointment.get("therapistUid") not in aliases:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to view this appointment",
@@ -180,22 +181,32 @@ async def update_appointment(
                 detail="Appointment not found",
             )
 
-        # Verify therapist owns this appointment
-        if appointment.get("therapistUid") != decoded.get("uid"):
+        therapist_uid = decoded.get("uid")
+        aliases = db._therapist_uid_aliases(therapist_uid)
+        if appointment.get("therapistUid") not in aliases:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to update this appointment",
             )
 
         # Build update dict with only provided fields
-        updates = {k: v for k, v in request.model_dump().items() if v is not None}
+        updates = {
+            k: v for k, v in request.model_dump(mode="json").items() if v is not None
+        }
 
-        # If marking as completed, set completedAt
-        if updates.get("status") == AppointmentStatus.COMPLETED:
+        status_value = updates.get("status")
+        if status_value == AppointmentStatus.COMPLETED.value:
             updates["completedAt"] = datetime.utcnow()
+        elif status_value == AppointmentStatus.CONFIRMED.value:
+            updates["confirmedAt"] = datetime.utcnow()
 
-        if updates:
-            db.update_appointment(appointment_id, updates)
+        if not updates:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No updates provided",
+            )
+
+        db.update_appointment(appointment_id, updates)
 
         return {
             "status": "success",

@@ -39,8 +39,13 @@ import { Label } from "@/components/ui/label"
 const ITEMS_PER_PAGE = 12
 
 function PatientsContent() {
-  const { data: patients, loading, error } = usePatients()
-  const { execute: createPatient, loading: creating } = useCreatePatient()
+  const [refreshKey, setRefreshKey] = useState(0)
+  const { data: patients, loading, error } = usePatients(refreshKey)
+  const {
+    execute: createPatient,
+    loading: creating,
+    error: createError,
+  } = useCreatePatient()
   const { execute: updatePatient, loading: updating } = useUpdatePatient()
 
   const [query, setQuery] = useState("")
@@ -48,6 +53,7 @@ function PatientsContent() {
   const [statusFilter, setStatusFilter] = useState<string>("all")
   const [currentPage, setCurrentPage] = useState(1)
   const [isNewPatientOpen, setIsNewPatientOpen] = useState(false)
+  const [createFormError, setCreateFormError] = useState<string | null>(null)
   const [newPatientForm, setNewPatientForm] = useState({
     firstName: "",
     lastName: "",
@@ -77,6 +83,7 @@ function PatientsContent() {
 
   const handleCreatePatient = async (e: React.FormEvent) => {
     e.preventDefault()
+    setCreateFormError(null)
     if (
       !newPatientForm.firstName ||
       !newPatientForm.lastName ||
@@ -85,16 +92,27 @@ function PatientsContent() {
       return
     }
 
-    await createPatient({
-      firstName: newPatientForm.firstName,
-      lastName: newPatientForm.lastName,
-      email: newPatientForm.email,
-      phoneNumber: newPatientForm.phoneNumber,
-      status: "new",
-    })
+    try {
+      await createPatient({
+        firstName: newPatientForm.firstName,
+        lastName: newPatientForm.lastName,
+        email: newPatientForm.email,
+        phone: newPatientForm.phoneNumber,
+      })
 
-    setNewPatientForm({ firstName: "", lastName: "", email: "", phoneNumber: "" })
-    setIsNewPatientOpen(false)
+      setNewPatientForm({
+        firstName: "",
+        lastName: "",
+        email: "",
+        phoneNumber: "",
+      })
+      setIsNewPatientOpen(false)
+      setRefreshKey((key) => key + 1)
+    } catch (err) {
+      setCreateFormError(
+        err instanceof Error ? err.message : "Failed to create patient."
+      )
+    }
   }
 
   const PatientCardSkeleton = () => (
@@ -119,9 +137,21 @@ function PatientsContent() {
       subtitle={`${patientList.length} patients under your care`}
     >
       {error && (
-        <div className="flex items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">
-          <AlertCircle className="h-4 w-4" />
-          <span>Failed to load patients. Please try again.</span>
+        <div className="flex items-start gap-2 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>
+            <p className="font-medium">Failed to load patients</p>
+            <p className="mt-1">{error.message}</p>
+            {error.message.includes("Firebase Admin") && (
+              <p className="mt-2 text-xs">
+                Add your service account JSON to{" "}
+                <code className="rounded bg-red-100 px-1">
+                  web/backend/firebase-adminsdk.json
+                </code>{" "}
+                and restart the backend.
+              </p>
+            )}
+          </div>
         </div>
       )}
 
@@ -252,6 +282,12 @@ function PatientsContent() {
                       }
                     />
                   </div>
+                  {(createFormError || createError) && (
+                    <div className="flex items-start gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                      <span>{createFormError || createError?.message}</span>
+                    </div>
+                  )}
                   <Button
                     type="submit"
                     disabled={creating || !newPatientForm.firstName ||

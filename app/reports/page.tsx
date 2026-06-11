@@ -1,6 +1,7 @@
 "use client"
 
 import { useMemo } from "react"
+import { ProtectedRoute } from "@/app/protected-route"
 import { PortalShell } from "@/components/portal-shell"
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import {
@@ -31,6 +32,14 @@ const servedConfig = {
 } satisfies ChartConfig
 
 export default function ReportsPage() {
+  return (
+    <ProtectedRoute allowedRoles={["therapist"]} requireVerified>
+      <ReportsPageContent />
+    </ProtectedRoute>
+  )
+}
+
+function ReportsPageContent() {
   const { data: patients } = usePatients()
   const { data: appointments } = useAppointments()
   const { data: alerts } = useRiskAlerts()

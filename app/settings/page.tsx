@@ -14,22 +14,12 @@ import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Smartphone, Laptop, Monitor, ShieldCheck, Loader2 } from "lucide-react"
-
-const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-
-type DayAvailability = {
-  day: string
-  enabled: boolean
-  start: string
-  end: string
-}
-
-const defaultAvailability: DayAvailability[] = days.map((day, index) => ({
-  day,
-  enabled: index < 5,
-  start: "09:00",
-  end: "17:00",
-}))
+import {
+  defaultWeeklyAvailability,
+  fromStoredAvailability,
+  toMobileAvailability,
+  type DayAvailability,
+} from "@/lib/availability"
 
 type ProfileForm = {
   name: string
@@ -66,7 +56,7 @@ function SettingsContent() {
     profilePhoto: "",
     bio: "",
   })
-  const [availability, setAvailability] = useState<DayAvailability[]>(defaultAvailability)
+  const [availability, setAvailability] = useState<DayAvailability[]>(defaultWeeklyAvailability())
 
   useEffect(() => {
     let cancelled = false
@@ -108,17 +98,7 @@ function SettingsContent() {
           bio: (data.bio as string) || "",
         })
 
-        const availabilityData = Array.isArray(data.availability) ? data.availability : []
-        const normalizedAvailability = days.map((day, index) => {
-          const fromDb = availabilityData.find((entry: any) => entry?.day === day)
-          return {
-            day,
-            enabled: Boolean(fromDb?.enabled ?? index < 5),
-            start: typeof fromDb?.start === "string" ? fromDb.start : "09:00",
-            end: typeof fromDb?.end === "string" ? fromDb.end : "17:00",
-          }
-        })
-        setAvailability(normalizedAvailability)
+        setAvailability(fromStoredAvailability(data.availability))
       } catch {
         if (!cancelled) {
           setSaveMessage("Could not load your profile data.")
@@ -192,7 +172,7 @@ function SettingsContent() {
           Authorization: `Bearer ${idToken}`,
         },
         body: JSON.stringify({
-          availability,
+          availability: toMobileAvailability(availability),
         }),
       })
 

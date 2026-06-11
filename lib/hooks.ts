@@ -32,12 +32,17 @@ function useQuery<T>(
   queryFn: () => Promise<any>,
   dependencies: any[] = [],
   pollInterval: number | null = null
-): UseQueryState<T> {
+): UseQueryState<T> & { refetch: () => Promise<void> } {
   const [state, setState] = useState<UseQueryState<T>>({
     data: null,
     loading: true,
     error: null,
   });
+  const [reloadToken, setReloadToken] = useState(0);
+
+  const refetch = useCallback(async () => {
+    setReloadToken((token) => token + 1);
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -79,16 +84,19 @@ function useQuery<T>(
       mounted = false;
       if (pollTimeout) clearTimeout(pollTimeout);
     };
-  }, dependencies);
+  }, [...dependencies, reloadToken]);
 
-  return state;
+  return { ...state, refetch };
 }
 
 /**
  * Hook for listing all patients
  */
-export function usePatients() {
-  return useQuery(() => patientAPI.list().then((res) => res.patients || []));
+export function usePatients(refreshKey = 0) {
+  return useQuery(
+    () => patientAPI.list().then((res) => res.patients || []),
+    [refreshKey]
+  );
 }
 
 /**
@@ -98,8 +106,8 @@ export function usePatient(patientId: string | null) {
   return useQuery(
     () =>
       patientId
-        ? patientAPI.get(patientId)
-        : Promise.resolve({ patient: null }),
+        ? patientAPI.get(patientId).then((res) => res.patient ?? null)
+        : Promise.resolve(null),
     [patientId]
   );
 }
@@ -139,6 +147,30 @@ export function useAppointment(appointmentId: string | null) {
  */
 export function useServices() {
   return useQuery(() => serviceAPI.list().then((res) => res.services || []));
+}
+
+/**
+ * Hook for fetching a patient's mobile app activity (mood check-ins + journal entries).
+ * Requires the patient to be linked via patientAPI.linkFirebaseUid first.
+ */
+export function usePatientMobileActivity(
+  patientId: string | null,
+  limit = 30,
+  refreshKey = 0
+) {
+  return useQuery(
+    () =>
+      patientId
+        ? patientAPI
+            .getMobileActivity(patientId, limit)
+            .then((res) => res)
+        : Promise.resolve({
+            linked: false,
+            moodCheckins: [],
+            journalEntries: [],
+          }),
+    [patientId, limit, refreshKey]
+  );
 }
 
 /**
@@ -244,12 +276,14 @@ function useMutation<T>(
           loading: false,
         }));
       } catch (err) {
+        const error =
+          err instanceof Error ? err : new Error(String(err));
         setState((prev) => ({
           ...prev,
-          error:
-            err instanceof Error ? err : new Error(String(err)),
+          error,
           loading: false,
         }));
+        throw error;
       }
     },
     [mutationFn]
@@ -276,6 +310,25 @@ export function useCreatePatient() {
 export function useUpdatePatient() {
   return useMutation(({ patientId, ...data }) =>
     patientAPI.update(patientId, data).then((res) => res)
+  );
+}
+
+/**
+ * Hook for linking a patient's mobile Firebase UID
+ */
+export function useLinkPatientFirebaseUid() {
+  return useMutation(
+    ({ patientId, firebaseUid }: { patientId: string; firebaseUid: string }) =>
+      patientAPI.linkFirebaseUid(patientId, firebaseUid).then((res) => res)
+  );
+}
+
+/**
+ * Hook for removing a patient's mobile Firebase UID link
+ */
+export function useUnlinkPatientFirebaseUid() {
+  return useMutation((patientId: string) =>
+    patientAPI.unlinkFirebaseUid(patientId).then((res) => res)
   );
 }
 

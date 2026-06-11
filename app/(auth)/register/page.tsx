@@ -2,15 +2,31 @@
 
 import { useState } from "react"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
-import { ArrowLeft, ArrowRight, Upload, Clock, CheckCircle2, FileText, User, BadgeCheck } from "lucide-react"
+import {
+  ArrowLeft,
+  ArrowRight,
+  Upload,
+  Clock,
+  CheckCircle2,
+  FileText,
+  User,
+  BadgeCheck,
+  CalendarDays,
+} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
-import { createUserWithEmailAndPassword } from "firebase/auth"
+import { createUserWithEmailAndPassword, signOut } from "firebase/auth"
 import { auth } from "@/lib/firebase"
+import {
+  defaultWeeklyAvailability,
+  hasEnabledAvailability,
+  toMobileAvailability,
+  type DayAvailability,
+} from "@/lib/availability"
 
 const specializationOptions = [
   "Anxiety",
@@ -29,10 +45,16 @@ type RegisterFormData = {
   phone: string
 }
 
+type CredentialFormData = {
+  qualifications: string
+  licenseNumber: string
+  yearsOfExperience: string
+  bio: string
+}
+
 type UploadStatus = "idle" | "selected" | "uploading" | "uploaded" | "failed"
 
 export default function RegisterPage() {
-  const router = useRouter()
   const [step, setStep] = useState(1)
   const [selected, setSelected] = useState<string[]>(["Anxiety"])
   const [loading, setLoading] = useState(false)
@@ -42,6 +64,7 @@ export default function RegisterPage() {
   const [photoStatus, setPhotoStatus] = useState<UploadStatus>("idle")
   const [docStatus, setDocStatus] = useState<UploadStatus>("idle")
   const [uploadedDocCount, setUploadedDocCount] = useState(0)
+  const [availability, setAvailability] = useState<DayAvailability[]>(defaultWeeklyAvailability())
 
   const [formData, setFormData] = useState<RegisterFormData>({
     name: "",
@@ -50,8 +73,21 @@ export default function RegisterPage() {
     phone: "",
   })
 
+  const [credentialData, setCredentialData] = useState<CredentialFormData>({
+    qualifications: "",
+    licenseNumber: "",
+    yearsOfExperience: "",
+    bio: "",
+  })
+
   function toggleSpec(s: string) {
     setSelected((prev) => (prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]))
+  }
+
+  function updateAvailability(day: string, patch: Partial<DayAvailability>) {
+    setAvailability((prev) =>
+      prev.map((entry) => (entry.day === day ? { ...entry, ...patch } : entry)),
+    )
   }
 
   async function uploadRegistrationFiles(idToken: string) {
@@ -61,14 +97,14 @@ export default function RegisterPage() {
 
     if (profilePhotoFile) {
       setPhotoStatus("uploading")
-      const formData = new FormData()
-      formData.append("file", profilePhotoFile)
+      const uploadForm = new FormData()
+      uploadForm.append("file", profilePhotoFile)
       const res = await fetch(`${baseUrl}/api/uploads/profile-photo`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${idToken}`,
         },
-        body: formData,
+        body: uploadForm,
       })
 
       if (!res.ok) {
@@ -87,16 +123,16 @@ export default function RegisterPage() {
 
     for (const file of documentFiles) {
       setDocStatus("uploading")
-      const formData = new FormData()
-      formData.append("file", file)
-      formData.append("documentType", "license")
+      const uploadForm = new FormData()
+      uploadForm.append("file", file)
+      uploadForm.append("documentType", "license")
 
       const res = await fetch(`${baseUrl}/api/uploads/document`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${idToken}`,
         },
-        body: formData,
+        body: uploadForm,
       })
 
       if (!res.ok) {
@@ -120,7 +156,81 @@ export default function RegisterPage() {
     return { profilePhoto, documentUrls }
   }
 
-  if (step === 3) {
+  async function submitRegistration() {
+    setError("")
+    setLoading(true)
+
+    try {
+      const userCred = await createUserWithEmailAndPassword(
+        auth,
+        formData.email,
+        formData.password,
+      )
+
+      const idToken = await userCred.user.getIdToken()
+      const { profilePhoto, documentUrls } = await uploadRegistrationFiles(idToken)
+      const mobileAvailability = toMobileAvailability(availability)
+
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/auth/set-claims`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${idToken}`,
+          },
+          body: JSON.stringify({
+            uid: userCred.user.uid,
+            role: "therapist",
+            verified: false,
+            status: "pending_verification",
+            name: formData.name,
+            email: formData.email,
+            phone: formData.phone,
+            qualifications: credentialData.qualifications,
+            licenseNumber: credentialData.licenseNumber,
+            yearsOfExperience: parseInt(credentialData.yearsOfExperience, 10),
+            bio: credentialData.bio,
+            specializations: selected,
+            profilePhoto,
+            documentUrls,
+            availability: mobileAvailability,
+          }),
+        },
+      )
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}))
+        throw new Error(errData.detail || "Failed to save therapist profile")
+      }
+
+      await signOut(auth)
+      setStep(4)
+    } catch (err: unknown) {
+      const firebaseErr = err as { code?: string; message?: string }
+      let message = firebaseErr.message || "Failed to create account"
+
+      if (firebaseErr.code === "auth/configuration-not-found") {
+        message = "Firebase is not properly configured. Please check the admin console."
+      } else if (firebaseErr.code === "auth/email-already-in-use") {
+        message = "An account with this email already exists. Please sign in instead."
+      } else if (firebaseErr.code === "auth/invalid-email") {
+        message = "Please enter a valid email address."
+      } else if (firebaseErr.code === "auth/weak-password") {
+        message = "Password must be at least 6 characters long."
+      } else if (firebaseErr.code === "auth/operation-not-allowed") {
+        message = "Email/password signup is not enabled. Please contact support."
+      } else if (firebaseErr.code === "auth/too-many-requests") {
+        message = "Too many signup attempts. Please try again later."
+      }
+
+      setError(message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  if (step === 4) {
     return (
       <div className="space-y-6 text-center">
         <div className="mx-auto flex size-16 items-center justify-center rounded-2xl bg-warning/15 text-warning-foreground">
@@ -129,7 +239,8 @@ export default function RegisterPage() {
         <div className="space-y-2">
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Application submitted</h1>
           <p className="text-sm text-muted-foreground">
-            Your credentials are under review. Our clinical team verifies all licenses before granting access.
+            Your credentials and availability are under review. You will appear in the mobile app once an admin
+            approves your account.
           </p>
         </div>
 
@@ -181,11 +292,11 @@ export default function RegisterPage() {
         <p className="text-sm text-muted-foreground">Join the Moody clinical network. All applications are verified.</p>
       </div>
 
-      {/* Stepper */}
       <div className="flex items-center gap-2">
         {[
           { n: 1, label: "Profile", icon: User },
           { n: 2, label: "Credentials", icon: BadgeCheck },
+          { n: 3, label: "Availability", icon: CalendarDays },
         ].map((s, i) => (
           <div key={s.n} className="flex flex-1 items-center gap-2">
             <div
@@ -196,10 +307,10 @@ export default function RegisterPage() {
             >
               <s.icon className="size-4" />
             </div>
-            <span className={cn("text-sm font-medium", step >= s.n ? "text-foreground" : "text-muted-foreground")}>
+            <span className={cn("hidden text-sm font-medium sm:inline", step >= s.n ? "text-foreground" : "text-muted-foreground")}>
               {s.label}
             </span>
-            {i === 0 ? <div className="h-px flex-1 bg-border" /> : null}
+            {i < 2 ? <div className="h-px flex-1 bg-border" /> : null}
           </div>
         ))}
       </div>
@@ -305,101 +416,58 @@ export default function RegisterPage() {
             <ArrowRight className="size-4" />
           </Button>
         </form>
-      ) : (
+      ) : step === 2 ? (
         <form
           key="register-step-2"
-          onSubmit={async (e) => {
+          onSubmit={(e) => {
             e.preventDefault()
+            const form = new FormData(e.currentTarget)
+            setCredentialData({
+              qualifications: form.get("qual") as string,
+              licenseNumber: form.get("license") as string,
+              yearsOfExperience: form.get("exp") as string,
+              bio: (form.get("bio") as string) || "",
+            })
             setError("")
-            setLoading(true)
-
-            try {
-              const form = new FormData(e.currentTarget)
-              const qual = form.get("qual") as string
-              const lic = form.get("license") as string
-              const exp = form.get("exp") as string
-              const bio = form.get("bio") as string
-
-              // 1. Create Firebase Auth user
-              const userCred = await createUserWithEmailAndPassword(auth, formData.email, formData.password)
-
-              // 2. Upload optional profile photo and documents.
-              const idToken = await userCred.user.getIdToken()
-              const { profilePhoto, documentUrls } = await uploadRegistrationFiles(idToken)
-
-              // 3. Call backend to set custom claims and persist therapist profile.
-              try {
-                const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/auth/set-claims`, {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${idToken}`,
-                  },
-                  body: JSON.stringify({
-                    uid: userCred.user.uid,
-                    role: "therapist",
-                    verified: false,
-                    status: "pending_verification",
-                    name: formData.name,
-                    email: formData.email,
-                    phone: formData.phone,
-                    qualifications: qual,
-                    licenseNumber: lic,
-                    yearsOfExperience: parseInt(exp, 10),
-                    bio,
-                    specializations: selected,
-                    profilePhoto,
-                    documentUrls,
-                  }),
-                })
-
-                if (!response.ok) {
-                  const errData = await response.json().catch(() => ({}))
-                  throw new Error(errData.detail || "Failed to save therapist profile")
-                }
-              } catch (err) {
-                console.warn('Could not set custom claims:', err)
-                throw err
-              }
-
-              setStep(3)
-            } catch (err: any) {
-              // Map Firebase error codes to user-friendly messages
-              let message = err.message || "Failed to create account"
-              
-              if (err.code === "auth/configuration-not-found") {
-                message = "Firebase is not properly configured. Please check the admin console."
-              } else if (err.code === "auth/email-already-in-use") {
-                message = "An account with this email already exists. Please sign in instead."
-              } else if (err.code === "auth/invalid-email") {
-                message = "Please enter a valid email address."
-              } else if (err.code === "auth/weak-password") {
-                message = "Password must be at least 6 characters long."
-              } else if (err.code === "auth/operation-not-allowed") {
-                message = "Email/password signup is not enabled. Please contact support."
-              } else if (err.code === "auth/too-many-requests") {
-                message = "Too many signup attempts. Please try again later."
-              }
-              
-              setError(message)
-            } finally {
-              setLoading(false)
-            }
+            setStep(3)
           }}
           className="space-y-4"
         >
           <div className="space-y-2">
             <Label htmlFor="qual">Qualifications</Label>
-            <Input id="qual" name="qual" required placeholder="Ph.D. Clinical Psychology, LCSW" className="bg-card" />
+            <Input
+              id="qual"
+              name="qual"
+              required
+              defaultValue={credentialData.qualifications}
+              placeholder="Ph.D. Clinical Psychology, LCSW"
+              className="bg-card"
+            />
           </div>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="license">License number</Label>
-              <Input id="license" name="license" required placeholder="PSY-00000-XX" className="bg-card" />
+              <Input
+                id="license"
+                name="license"
+                required
+                defaultValue={credentialData.licenseNumber}
+                placeholder="PSY-00000-XX"
+                className="bg-card"
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="exp">Years of experience</Label>
-              <Input id="exp" name="exp" type="number" min={0} required placeholder="8" className="bg-card" />
+              <Input
+                id="exp"
+                name="exp"
+                type="number"
+                min={0}
+                required
+                defaultValue={credentialData.yearsOfExperience}
+                placeholder="8"
+                className="bg-card"
+              />
             </div>
           </div>
 
@@ -426,7 +494,14 @@ export default function RegisterPage() {
 
           <div className="space-y-2">
             <Label htmlFor="bio">Professional bio</Label>
-            <Textarea id="bio" name="bio" rows={3} placeholder="Briefly describe your clinical approach..." className="bg-card" />
+            <Textarea
+              id="bio"
+              name="bio"
+              rows={3}
+              defaultValue={credentialData.bio}
+              placeholder="Briefly describe your clinical approach..."
+              className="bg-card"
+            />
           </div>
 
           <div className="space-y-2">
@@ -462,6 +537,67 @@ export default function RegisterPage() {
 
           <div className="flex gap-3">
             <Button type="button" variant="outline" className="flex-1 bg-transparent" onClick={() => setStep(1)}>
+              Back
+            </Button>
+            <Button type="submit" className="flex-1">
+              Continue
+              <ArrowRight className="size-4" />
+            </Button>
+          </div>
+        </form>
+      ) : (
+        <form
+          key="register-step-3"
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (!hasEnabledAvailability(availability)) {
+              setError("Enable at least one day with valid start and end times.")
+              return
+            }
+            void submitRegistration()
+          }}
+          className="space-y-4"
+        >
+          <div className="space-y-1">
+            <h2 className="text-lg font-semibold text-foreground">Weekly availability</h2>
+            <p className="text-sm text-muted-foreground">
+              Set the days and times patients can request appointments with you in the mobile app.
+            </p>
+          </div>
+
+          <div className="space-y-3">
+            {availability.map((entry) => (
+              <div key={entry.day} className="flex flex-col gap-3 rounded-lg border border-border p-3 sm:flex-row sm:items-center">
+                <div className="flex items-center gap-3 sm:w-40">
+                  <Switch
+                    checked={entry.enabled}
+                    onCheckedChange={(checked) => updateAvailability(entry.day, { enabled: Boolean(checked) })}
+                  />
+                  <span className="text-sm font-medium">{entry.day}</span>
+                </div>
+                <div className="flex flex-1 items-center gap-2">
+                  <Input
+                    type="time"
+                    value={entry.start}
+                    disabled={!entry.enabled}
+                    onChange={(e) => updateAvailability(entry.day, { start: e.target.value })}
+                    className="bg-card"
+                  />
+                  <span className="text-xs text-muted-foreground">to</span>
+                  <Input
+                    type="time"
+                    value={entry.end}
+                    disabled={!entry.enabled}
+                    onChange={(e) => updateAvailability(entry.day, { end: e.target.value })}
+                    className="bg-card"
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex gap-3">
+            <Button type="button" variant="outline" className="flex-1 bg-transparent" onClick={() => setStep(2)}>
               Back
             </Button>
             <Button type="submit" className="flex-1" disabled={loading}>

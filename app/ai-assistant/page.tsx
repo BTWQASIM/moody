@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import { ProtectedRoute } from "@/app/protected-route"
 import { PortalShell } from "@/components/portal-shell"
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -796,6 +797,14 @@ function GenerateProgressReportTab({ patients }: { patients: Patient[] }) {
 // ============================================================================
 
 export default function AIAssistantPage() {
+  return (
+    <ProtectedRoute allowedRoles={["therapist"]} requireVerified>
+      <AIAssistantPageContent />
+    </ProtectedRoute>
+  )
+}
+
+function AIAssistantPageContent() {
   const { data: patients, loading: patientsLoading } = usePatients()
   const { data: appointments, loading: appointmentsLoading } = useAppointments()
   const { data: moodEntries, loading: moodEntriesLoading } = useMoodEntries(null)

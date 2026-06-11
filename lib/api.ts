@@ -42,8 +42,15 @@ async function apiCall(
   const response = await fetch(`${API_BASE_URL}${endpoint}`, options);
 
   if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.detail || `API error: ${response.status}`);
+    const errorBody = await response.json().catch(() => ({}));
+    const detail = errorBody.detail;
+    const message =
+      typeof detail === "string"
+        ? detail
+        : Array.isArray(detail)
+          ? detail.map((item: { msg?: string }) => item.msg).filter(Boolean).join(", ")
+          : `API error: ${response.status}`;
+    throw new Error(message || `API error: ${response.status}`);
   }
 
   return await response.json();
@@ -123,6 +130,23 @@ export const patientAPI = {
 
   async delete(patientId: string) {
     return apiCall(`/api/patients/${patientId}`, "DELETE");
+  },
+
+  /** Link a patient's mobile Firebase Auth UID to their portal record. */
+  async linkFirebaseUid(patientId: string, firebaseUid: string) {
+    return apiCall(`/api/patients/${patientId}/link`, "PATCH", { firebaseUid });
+  },
+
+  /** Remove the Firebase UID link from a patient record. */
+  async unlinkFirebaseUid(patientId: string) {
+    return apiCall(`/api/patients/${patientId}/link`, "DELETE");
+  },
+
+  /** Fetch mood check-ins and journal entries from the mobile app for a patient. */
+  async getMobileActivity(patientId: string, limit = 30) {
+    return apiCall(
+      `/api/patients/${patientId}/mobile-activity?limit=${limit}`
+    );
   },
 };
 

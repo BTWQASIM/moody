@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useMemo } from "react"
+import { ProtectedRoute } from "@/app/protected-route"
 import { PortalShell } from "@/components/portal-shell"
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -55,6 +56,11 @@ interface Appointment {
   id?: string
   therapistUid?: string
   patientId?: string
+  /** Denormalized patient name — present on mobile-originated appointments */
+  patientName?: string
+  patientEmail?: string
+  /** Denormalized therapist name — present on mobile-originated appointments */
+  therapistName?: string
   scheduledAt?: string | Date
   duration?: number
   type?: string
@@ -62,6 +68,8 @@ interface Appointment {
   notes?: string
   sessionNotes?: string
   createdAt?: string | Date
+  /** "mobile" when the request was created by the patient app */
+  source?: string
 }
 
 interface Patient {
@@ -117,10 +125,11 @@ function AppointmentListView({
   const startIdx = (currentPage - 1) * itemsPerPage
   const paginatedAppointments = appointments.slice(startIdx, startIdx + itemsPerPage)
 
-  const getPatientName = (patientId?: string): string => {
-    const patient = patients.find((p) => p.id === patientId)
-    if (!patient) return "Unknown Patient"
-    return `${patient.firstName || ""} ${patient.lastName || ""}`.trim()
+  /** Resolve patient name: portal patients list first, then appointment's denormalized field. */
+  const getPatientName = (apt: Appointment): string => {
+    const patient = patients.find((p) => p.id === apt.patientId)
+    if (patient) return `${patient.firstName || ""} ${patient.lastName || ""}`.trim()
+    return apt.patientName || "Unknown Patient"
   }
 
   const formatDateTime = (date?: string | Date): { date: string; time: string } => {
@@ -164,7 +173,8 @@ function AppointmentListView({
     <div className="space-y-3">
       {paginatedAppointments.map((apt) => {
         const { date, time } = formatDateTime(apt.scheduledAt)
-        const patientName = getPatientName(apt.patientId as string)
+        const patientName = getPatientName(apt)
+        const isMobileRequest = apt.source === "mobile"
 
         return (
           <Card
@@ -175,9 +185,17 @@ function AppointmentListView({
             <CardContent className="pt-6">
               <div className="flex items-start justify-between gap-4">
                 <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-2">
+                  <div className="flex items-center gap-2 mb-2 flex-wrap">
                     <h3 className="font-semibold">{patientName}</h3>
                     <StatusBadge status={apt.status} />
+                    {isMobileRequest && (
+                      <Badge
+                        variant="outline"
+                        className="border border-violet-200 bg-violet-50 text-violet-700 text-xs"
+                      >
+                        Patient Request
+                      </Badge>
+                    )}
                   </div>
                   <div className="space-y-1 text-sm text-muted-foreground">
                     <div className="flex items-center gap-2">
@@ -258,10 +276,16 @@ function AppointmentWeekView({
     return date
   })
 
-  const getPatientName = (patientId?: string): string => {
-    const patient = patients.find((p) => p.id === patientId)
-    if (!patient) return "?"
-    return `${(patient.firstName || "")[0]}${(patient.lastName || "")[0]}`
+  const getPatientName = (apt: Appointment): string => {
+    const patient = patients.find((p) => p.id === apt.patientId)
+    if (patient) {
+      const first = (patient.firstName || "")[0] ?? ""
+      const last = (patient.lastName || "")[0] ?? ""
+      return first + last || "?"
+    }
+    const full = apt.patientName
+    if (full) return `${full[0] ?? ""}${full.split(" ")[1]?.[0] ?? ""}`.toUpperCase() || "?"
+    return "?"
   }
 
   const appointmentsForDay = (dayDate: Date) => {
@@ -311,7 +335,7 @@ function AppointmentWeekView({
                       hour12: false,
                     })}
                     <br />
-                    {getPatientName(apt.patientId)}
+                    {getPatientName(apt)}
                   </div>
                 ))}
               </CardContent>
@@ -408,7 +432,7 @@ function CreateAppointmentDialog({
 
           <div className="space-y-2">
             <Label htmlFor="patient">Patient *</Label>
-            <Select value={formData.patientId} onValueChange={(v) => setFormData({ ...formData, patientId: v })}>
+            <Select value={formData.patientId} onValueChange={(v) => setFormData({ ...formData, patientId: v ?? "" })}>
               <SelectTrigger id="patient">
                 <SelectValue placeholder="Select a patient" />
               </SelectTrigger>
@@ -457,7 +481,7 @@ function CreateAppointmentDialog({
             </div>
             <div className="space-y-2">
               <Label htmlFor="type">Type *</Label>
-              <Select value={formData.type} onValueChange={(v) => setFormData({ ...formData, type: v })}>
+              <Select value={formData.type} onValueChange={(v) => setFormData({ ...formData, type: v ?? "" })}>
                 <SelectTrigger id="type">
                   <SelectValue />
                 </SelectTrigger>
@@ -515,7 +539,7 @@ function AppointmentActionsDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
   appointment: Appointment | null
-  onActionComplete: () => void
+  onActionComplete: () => void | Promise<void>
 }) {
   const { execute: confirmApt, loading: confirmLoading } = useConfirmAppointment()
   const { execute: cancelApt, loading: cancelLoading } = useCancelAppointment()
@@ -523,10 +547,16 @@ function AppointmentActionsDialog({
 
   if (!appointment) return null
 
+  const isMobileRequest = appointment.source === "mobile"
+  const confirmLabel = isMobileRequest ? "Accept Request" : "Confirm Appointment"
+  const cancelLabel = isMobileRequest ? "Decline Request" : "Cancel Appointment"
+  const confirmingLabel = isMobileRequest ? "Accepting…" : "Confirming…"
+  const cancellingLabel = isMobileRequest ? "Declining…" : "Cancelling…"
+
   const handleConfirm = async () => {
     try {
       await confirmApt(appointment.id || "")
-      onActionComplete()
+      await onActionComplete()
       onOpenChange(false)
     } catch (err) {
       console.error("Failed to confirm appointment:", err)
@@ -536,7 +566,7 @@ function AppointmentActionsDialog({
   const handleCancel = async () => {
     try {
       await cancelApt(appointment.id || "")
-      onActionComplete()
+      await onActionComplete()
       onOpenChange(false)
     } catch (err) {
       console.error("Failed to cancel appointment:", err)
@@ -548,14 +578,61 @@ function AppointmentActionsDialog({
   const isCompleted = appointment.status === "completed"
   const isCancelled = appointment.status === "cancelled"
 
+  const formatDateTime = (d?: string | Date) => {
+    if (!d) return ""
+    const date = new Date(d)
+    return date.toLocaleString("en-US", {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    })
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Appointment Actions</DialogTitle>
-          <DialogDescription>
-            Status: <StatusBadge status={appointment.status} />
-          </DialogDescription>
+          <DialogTitle className="flex items-center gap-2">
+            Appointment Actions
+            {isMobileRequest && (
+              <Badge
+                variant="outline"
+                className="border-violet-200 bg-violet-50 text-violet-700 text-xs"
+              >
+                Patient Request
+              </Badge>
+            )}
+          </DialogTitle>
+          <div className="space-y-1 text-sm text-muted-foreground">
+            <div className="flex items-center gap-2">
+              <span>Status:</span>
+              <StatusBadge status={appointment.status} />
+            </div>
+            {isMobileRequest && appointment.patientName && (
+              <p>
+                <span className="font-medium text-foreground">From:</span>{" "}
+                {appointment.patientName}
+                {appointment.patientEmail && (
+                  <span> ({appointment.patientEmail})</span>
+                )}
+              </p>
+            )}
+            {appointment.scheduledAt && (
+              <p>
+                <span className="font-medium text-foreground">Requested for:</span>{" "}
+                {formatDateTime(appointment.scheduledAt)}
+              </p>
+            )}
+            {appointment.notes && (
+              <p>
+                <span className="font-medium text-foreground">Note:</span>{" "}
+                {appointment.notes}
+              </p>
+            )}
+          </div>
         </DialogHeader>
 
         <div className="space-y-3">
@@ -569,14 +646,18 @@ function AppointmentActionsDialog({
           {isCancelled && (
             <Alert variant="destructive">
               <XCircle className="size-4" />
-              <AlertDescription>This appointment has been cancelled.</AlertDescription>
+              <AlertDescription>
+                {isMobileRequest
+                  ? "This request has been declined."
+                  : "This appointment has been cancelled."}
+              </AlertDescription>
             </Alert>
           )}
 
           {canConfirm && (
             <Button onClick={handleConfirm} disabled={confirmLoading} className="w-full">
               <CheckCircle className="size-4 mr-2" />
-              {confirmLoading ? "Confirming..." : "Confirm Appointment"}
+              {confirmLoading ? confirmingLabel : confirmLabel}
             </Button>
           )}
 
@@ -589,13 +670,15 @@ function AppointmentActionsDialog({
                   className="w-full text-destructive hover:text-destructive"
                 >
                   <XCircle className="size-4 mr-2" />
-                  Cancel Appointment
+                  {cancelLabel}
                 </Button>
               ) : (
                 <div className="space-y-2 rounded-lg bg-destructive/10 p-3">
                   <p className="text-sm font-medium">Are you sure?</p>
                   <p className="text-xs text-muted-foreground">
-                    This action cannot be undone. The patient will be notified.
+                    {isMobileRequest
+                      ? "The patient will see their request as declined."
+                      : "This action cannot be undone. The patient will be notified."}
                   </p>
                   <div className="flex gap-2">
                     <Button
@@ -605,7 +688,7 @@ function AppointmentActionsDialog({
                       size="sm"
                       className="flex-1"
                     >
-                      {cancelLoading ? "Cancelling..." : "Confirm Cancel"}
+                      {cancelLoading ? cancellingLabel : `Yes, ${isMobileRequest ? "Decline" : "Cancel"}`}
                     </Button>
                     <Button
                       onClick={() => setShowConfirmCancel(false)}
@@ -631,12 +714,20 @@ function AppointmentActionsDialog({
 // ============================================================================
 
 export default function AppointmentsPage() {
+  return (
+    <ProtectedRoute allowedRoles={["therapist"]} requireVerified>
+      <AppointmentsPageContent />
+    </ProtectedRoute>
+  )
+}
+
+function AppointmentsPageContent() {
   const [view, setView] = useState<"list" | "week">("list")
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [actionDialogOpen, setActionDialogOpen] = useState(false)
   const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null)
 
-  const { data: appointments, loading: appointmentsLoading, error: appointmentsError } = useAppointments()
+  const { data: appointments, loading: appointmentsLoading, error: appointmentsError, refetch: refetchAppointments } = useAppointments()
   const { data: patients, loading: patientsLoading } = usePatients()
 
   const appointmentsList = (appointments as Appointment[]) || []
@@ -739,6 +830,15 @@ export default function AppointmentsPage() {
                   <p className="text-sm text-muted-foreground">Total Appointments</p>
                   <p className="text-2xl font-bold">{appointmentsList.length}</p>
                 </div>
+                {appointmentsList.filter((a) => a.source === "mobile" && a.status === "pending").length > 0 && (
+                  <div className="rounded-lg bg-violet-50 border border-violet-200 p-3">
+                    <p className="text-sm text-violet-900 font-medium flex items-center gap-1">
+                      <AlertCircle className="size-3.5" />
+                      Patient Requests:{" "}
+                      {appointmentsList.filter((a) => a.source === "mobile" && a.status === "pending").length}
+                    </p>
+                  </div>
+                )}
                 <div className="rounded-lg bg-yellow-50 border border-yellow-200 p-3">
                   <p className="text-sm text-yellow-900 font-medium">
                     Pending: {appointmentsList.filter((a) => a.status === "pending").length}
@@ -808,9 +908,9 @@ export default function AppointmentsPage() {
         open={actionDialogOpen}
         onOpenChange={setActionDialogOpen}
         appointment={selectedAppointment}
-        onActionComplete={() => {
-          // Trigger refetch by clearing selected appointment
+        onActionComplete={async () => {
           setSelectedAppointment(null)
+          await refetchAppointments()
         }}
       />
     </PortalShell>

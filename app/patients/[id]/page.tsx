@@ -1,6 +1,5 @@
 "use client"
 
-import { notFound } from "next/navigation"
 import Link from "next/link"
 import { useParams } from "next/navigation"
 import { useState } from "react"
@@ -21,6 +20,9 @@ import {
   useClinicalNotes,
   useCreateMoodEntry,
   useCreateClinicalNote,
+  usePatientMobileActivity,
+  useLinkPatientFirebaseUid,
+  useUnlinkPatientFirebaseUid,
 } from "@/lib/hooks"
 import {
   ArrowLeft,
@@ -30,6 +32,10 @@ import {
   AlertTriangle,
   Loader2,
   Plus,
+  Smartphone,
+  Link2,
+  BookOpen,
+  Activity,
 } from "lucide-react"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
@@ -51,14 +57,40 @@ function PatientDetailContent() {
   const { data: clinicalNotes, loading: notesLoading } = useClinicalNotes(patientId)
   const { execute: createMoodEntry, loading: creatingMood } = useCreateMoodEntry()
   const { execute: createNote, loading: creatingNote } = useCreateClinicalNote()
+  const [mobileActivityRefreshKey, setMobileActivityRefreshKey] = useState(0)
+  const {
+    data: mobileActivity,
+    loading: mobileActivityLoading,
+    error: mobileActivityError,
+  } = usePatientMobileActivity(patientId, 30, mobileActivityRefreshKey)
+  const { execute: linkFirebaseUid, loading: linking } = useLinkPatientFirebaseUid()
+  const { execute: unlinkFirebaseUid, loading: unlinking } =
+    useUnlinkPatientFirebaseUid()
 
   const [moodForm, setMoodForm] = useState({ moodScore: 5, description: "" })
   const [noteForm, setNoteForm] = useState({ content: "", tags: "", isConfidential: false })
   const [isMoodOpen, setIsMoodOpen] = useState(false)
   const [isNoteOpen, setIsNoteOpen] = useState(false)
+  const [isLinkOpen, setIsLinkOpen] = useState(false)
+  const [firebaseUidInput, setFirebaseUidInput] = useState("")
+  const [linkError, setLinkError] = useState<string | null>(null)
 
   if (patientError) {
-    notFound()
+    return (
+      <PortalShell title="Patient not found" subtitle="Unable to load this patient">
+        <Link
+          href="/patients"
+          className="mb-4 inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
+        >
+          <ArrowLeft className="size-4" />
+          Back to directory
+        </Link>
+        <div className="flex items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">
+          <AlertTriangle className="h-4 w-4" />
+          <span>{patientError.message}</span>
+        </div>
+      </PortalShell>
+    )
   }
 
   const patientAppointments = (appointments || []).filter(
@@ -95,6 +127,34 @@ function PatientDetailContent() {
 
     setNoteForm({ content: "", tags: "", isConfidential: false })
     setIsNoteOpen(false)
+  }
+
+  const handleLinkFirebaseUid = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setLinkError(null)
+    const uid = firebaseUidInput.trim()
+    if (!uid) {
+      setLinkError("Please enter the patient's Firebase UID.")
+      return
+    }
+    try {
+      await linkFirebaseUid({ patientId, firebaseUid: uid })
+      setFirebaseUidInput("")
+      setIsLinkOpen(false)
+      setMobileActivityRefreshKey((key) => key + 1)
+    } catch (err: any) {
+      setLinkError(err?.message || "Failed to link account.")
+    }
+  }
+
+  const handleUnlinkFirebaseUid = async () => {
+    setLinkError(null)
+    try {
+      await unlinkFirebaseUid(patientId)
+      setMobileActivityRefreshKey((key) => key + 1)
+    } catch (err: any) {
+      setLinkError(err?.message || "Failed to unlink account.")
+    }
   }
 
   const LoadingSkeleton = () => (
@@ -192,6 +252,10 @@ function PatientDetailContent() {
               <TabsTrigger value="appointments">Appointments</TabsTrigger>
               <TabsTrigger value="mood">Mood Entries</TabsTrigger>
               <TabsTrigger value="notes">Clinical Notes</TabsTrigger>
+              <TabsTrigger value="mobile" className="flex items-center gap-1">
+                <Smartphone className="h-3.5 w-3.5" />
+                Mobile Activity
+              </TabsTrigger>
             </TabsList>
 
             {/* Overview */}
@@ -300,12 +364,14 @@ function PatientDetailContent() {
                 <CardHeader className="flex-row items-center justify-between space-y-0">
                   <CardTitle>Mood Entries</CardTitle>
                   <Dialog open={isMoodOpen} onOpenChange={setIsMoodOpen}>
-                    <DialogTrigger asChild>
-                      <Button size="sm">
-                        <Plus className="h-4 w-4 mr-1" />
-                        Add Entry
-                      </Button>
-                    </DialogTrigger>
+                    <DialogTrigger
+                      render={
+                        <Button size="sm">
+                          <Plus className="h-4 w-4 mr-1" />
+                          Add Entry
+                        </Button>
+                      }
+                    />
                     <DialogContent>
                       <DialogHeader>
                         <DialogTitle>Log Mood Entry</DialogTitle>
@@ -420,12 +486,14 @@ function PatientDetailContent() {
                 <CardHeader className="flex-row items-center justify-between space-y-0">
                   <CardTitle>Clinical Notes</CardTitle>
                   <Dialog open={isNoteOpen} onOpenChange={setIsNoteOpen}>
-                    <DialogTrigger asChild>
-                      <Button size="sm">
-                        <Plus className="h-4 w-4 mr-1" />
-                        Add Note
-                      </Button>
-                    </DialogTrigger>
+                    <DialogTrigger
+                      render={
+                        <Button size="sm">
+                          <Plus className="h-4 w-4 mr-1" />
+                          Add Note
+                        </Button>
+                      }
+                    />
                     <DialogContent>
                       <DialogHeader>
                         <DialogTitle>Create Clinical Note</DialogTitle>
@@ -555,6 +623,328 @@ function PatientDetailContent() {
                   )}
                 </CardContent>
               </Card>
+            </TabsContent>
+            {/* Mobile Activity */}
+            <TabsContent value="mobile" className="mt-4 space-y-4">
+              {/* Link / unlink mobile account */}
+              <Card>
+                <CardHeader className="flex-row items-center justify-between space-y-0">
+                  <div>
+                    <CardTitle className="flex items-center gap-2">
+                      <Smartphone className="h-4 w-4" />
+                      Mobile App Account
+                    </CardTitle>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Link this patient's moodie mobile account to see their
+                      self-reported mood check-ins and journal entries.
+                    </p>
+                  </div>
+                  {!mobileActivity?.linked ? (
+                    <Dialog open={isLinkOpen} onOpenChange={setIsLinkOpen}>
+                      <DialogTrigger
+                        render={
+                          <Button size="sm" variant="outline">
+                            <Link2 className="h-4 w-4 mr-1" />
+                            Link Account
+                          </Button>
+                        }
+                      />
+                      <DialogContent>
+                        <DialogHeader>
+                          <DialogTitle>Link Patient's Mobile Account</DialogTitle>
+                          <DialogDescription>
+                            Paste the Firebase UID from the patient's moodie mobile
+                            app account — not the therapist account. Find it in Firebase
+                            Console → Authentication → Users, matching the patient's
+                            login email.
+                          </DialogDescription>
+                        </DialogHeader>
+                        <form onSubmit={handleLinkFirebaseUid} className="space-y-4">
+                          <div className="space-y-2">
+                            <Label htmlFor="firebase-uid">Patient Firebase UID</Label>
+                            <Input
+                              id="firebase-uid"
+                              placeholder="e.g. abc123def456..."
+                              value={firebaseUidInput}
+                              onChange={(e) => setFirebaseUidInput(e.target.value)}
+                              required
+                            />
+                          </div>
+                          {linkError && (
+                            <div className="flex items-center gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+                              <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                              {linkError}
+                            </div>
+                          )}
+                          <Button
+                            type="submit"
+                            disabled={linking || !firebaseUidInput.trim()}
+                            className="w-full"
+                          >
+                            {linking ? (
+                              <>
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                Linking...
+                              </>
+                            ) : (
+                              "Link Account"
+                            )}
+                          </Button>
+                        </form>
+                      </DialogContent>
+                    </Dialog>
+                  ) : (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex items-center gap-2 rounded-full bg-green-100 px-3 py-1 text-xs font-medium text-green-700">
+                        <span className="h-2 w-2 rounded-full bg-green-500" />
+                        Linked
+                      </div>
+                      <Dialog open={isLinkOpen} onOpenChange={setIsLinkOpen}>
+                        <DialogTrigger
+                          render={
+                            <Button size="sm" variant="outline">
+                              Change UID
+                            </Button>
+                          }
+                        />
+                        <DialogContent>
+                          <DialogHeader>
+                            <DialogTitle>Change Linked Mobile Account</DialogTitle>
+                            <DialogDescription>
+                              Enter the correct Firebase UID for this patient's mobile
+                              app login.
+                            </DialogDescription>
+                          </DialogHeader>
+                          <form onSubmit={handleLinkFirebaseUid} className="space-y-4">
+                            <div className="space-y-2">
+                              <Label htmlFor="firebase-uid-change">Patient Firebase UID</Label>
+                              <Input
+                                id="firebase-uid-change"
+                                placeholder="Paste the patient's mobile app UID"
+                                value={firebaseUidInput}
+                                onChange={(e) => setFirebaseUidInput(e.target.value)}
+                                required
+                              />
+                            </div>
+                            {linkError && (
+                              <div className="flex items-center gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+                                <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                                {linkError}
+                              </div>
+                            )}
+                            <Button
+                              type="submit"
+                              disabled={linking || !firebaseUidInput.trim()}
+                              className="w-full"
+                            >
+                              {linking ? "Updating..." : "Update Link"}
+                            </Button>
+                          </form>
+                        </DialogContent>
+                      </Dialog>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={unlinking}
+                        onClick={handleUnlinkFirebaseUid}
+                      >
+                        {unlinking ? "Unlinking..." : "Unlink"}
+                      </Button>
+                    </div>
+                  )}
+                </CardHeader>
+                {mobileActivity?.linked && (
+                  <CardContent className="space-y-2">
+                    <p className="text-xs text-muted-foreground">
+                      Firebase UID:{" "}
+                      <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
+                        {mobileActivity.firebaseUid}
+                      </code>
+                    </p>
+                    {mobileActivity.mobileUserFound ? (
+                      <p className="text-xs text-muted-foreground">
+                        Mobile profile:{" "}
+                        <span className="font-medium text-foreground">
+                          {mobileActivity.mobileUserName || "Unknown"}
+                        </span>
+                        {mobileActivity.mobileUserEmail
+                          ? ` · ${mobileActivity.mobileUserEmail}`
+                          : ""}
+                      </p>
+                    ) : (
+                      <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                        <span>
+                          No mobile app profile found for this UID. You may have
+                          linked the wrong account — use <strong>Change UID</strong> and
+                          paste the UID from the patient's mobile login in Firebase
+                          Authentication.
+                        </span>
+                      </div>
+                    )}
+                  </CardContent>
+                )}
+              </Card>
+
+              {/* Error state */}
+              {mobileActivityError && (
+                <div className="flex items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">
+                  <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                  Failed to load mobile activity. Please try refreshing.
+                </div>
+              )}
+
+              {/* Not linked state */}
+              {!mobileActivityLoading && !mobileActivityError && !mobileActivity?.linked && (
+                <Card>
+                  <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+                    <Smartphone className="h-10 w-10 text-muted-foreground/40 mb-3" />
+                    <p className="font-medium text-sm text-muted-foreground">
+                      No mobile account linked
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground max-w-sm">
+                      Link the patient's moodie app account above to view their
+                      self-reported check-ins and journal entries here.
+                    </p>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Mood Check-ins */}
+              {(mobileActivity?.linked || mobileActivityLoading) && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <Activity className="h-4 w-4" />
+                      Mood Check-ins
+                      {!mobileActivityLoading && mobileActivity?.moodCheckins && (
+                        <span className="ml-auto text-xs font-normal text-muted-foreground">
+                          {mobileActivity.moodCheckins.length} record
+                          {mobileActivity.moodCheckins.length !== 1 ? "s" : ""}
+                        </span>
+                      )}
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    {mobileActivityLoading ? (
+                      <div className="space-y-2">
+                        {Array.from({ length: 3 }).map((_, i) => (
+                          <Skeleton key={i} className="h-16 w-full" />
+                        ))}
+                      </div>
+                    ) : !mobileActivity?.moodCheckins ||
+                      mobileActivity.moodCheckins.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">
+                        No mood check-ins recorded yet from the mobile app.
+                      </p>
+                    ) : (
+                      <div className="space-y-3">
+                        {mobileActivity.moodCheckins.map((checkin: any) => (
+                          <div
+                            key={checkin.id}
+                            className="rounded-lg border p-3"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex flex-wrap gap-1.5">
+                                {(checkin.moods as string[]).map(
+                                  (mood: string, i: number) => (
+                                    <span
+                                      key={i}
+                                      className="rounded-full bg-violet-100 px-2.5 py-0.5 text-xs font-medium text-violet-700"
+                                    >
+                                      {mood}
+                                    </span>
+                                  )
+                                )}
+                              </div>
+                              <span className="flex-shrink-0 text-xs text-muted-foreground">
+                                {checkin.timestamp
+                                  ? new Date(checkin.timestamp).toLocaleDateString(
+                                      "en-US",
+                                      {
+                                        month: "short",
+                                        day: "numeric",
+                                        year: "numeric",
+                                      }
+                                    )
+                                  : "—"}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Journal Entries */}
+              {(mobileActivity?.linked || mobileActivityLoading) && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <BookOpen className="h-4 w-4" />
+                      Journal Entries
+                      {!mobileActivityLoading && mobileActivity?.journalEntries && (
+                        <span className="ml-auto text-xs font-normal text-muted-foreground">
+                          {mobileActivity.journalEntries.length} record
+                          {mobileActivity.journalEntries.length !== 1 ? "s" : ""}
+                        </span>
+                      )}
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    {mobileActivityLoading ? (
+                      <div className="space-y-2">
+                        {Array.from({ length: 3 }).map((_, i) => (
+                          <Skeleton key={i} className="h-24 w-full" />
+                        ))}
+                      </div>
+                    ) : !mobileActivity?.journalEntries ||
+                      mobileActivity.journalEntries.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">
+                        No journal entries recorded yet from the mobile app.
+                      </p>
+                    ) : (
+                      <div className="space-y-3">
+                        {mobileActivity.journalEntries.map((entry: any) => (
+                          <div
+                            key={entry.id}
+                            className="rounded-lg border p-3"
+                          >
+                            <div className="mb-2 flex items-center justify-between gap-2">
+                              {entry.prompt ? (
+                                <p className="text-xs font-medium text-muted-foreground italic">
+                                  Prompt: {entry.prompt}
+                                </p>
+                              ) : (
+                                <p className="text-xs font-medium text-muted-foreground italic">
+                                  Free-write entry
+                                </p>
+                              )}
+                              <span className="flex-shrink-0 text-xs text-muted-foreground">
+                                {entry.timestamp
+                                  ? new Date(entry.timestamp).toLocaleDateString(
+                                      "en-US",
+                                      {
+                                        month: "short",
+                                        day: "numeric",
+                                        year: "numeric",
+                                      }
+                                    )
+                                  : "—"}
+                              </span>
+                            </div>
+                            <p className="text-sm leading-relaxed text-foreground whitespace-pre-wrap">
+                              {entry.entry}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
             </TabsContent>
           </Tabs>
         </>

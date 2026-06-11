@@ -107,6 +107,8 @@ class PatientContactInfo(BaseModel):
 class PatientProfile(BaseModel):
     id: str  # Firestore auto-generated ID or custom
     therapistUid: str  # Reference to therapist
+    # Firebase Auth UID of the patient's mobile app account (set when linked)
+    firebaseUid: Optional[str] = None
     firstName: str
     lastName: str
     dateOfBirth: str  # ISO 8601 format
@@ -280,3 +282,28 @@ class AuditLog(BaseModel):
     details: dict = Field(default_factory=dict)
     ipAddress: Optional[str] = None
     createdAt: datetime = Field(default_factory=datetime.utcnow)
+
+
+# ============================================================================
+# Mobile App Data Models (written directly by the Flutter patient app)
+# These map to the mobile-side Firestore collections: mood_checkins,
+# journal_entries.  They are read-only from the portal's perspective.
+# ============================================================================
+
+class MobileMoodCheckin(BaseModel):
+    """Maps to the `mood_checkins` collection written by the Flutter app."""
+    id: str  # Firestore auto-generated document ID
+    userId: str  # Patient's Firebase Auth UID
+    therapistUid: Optional[str] = None  # Set once patient is linked
+    moods: List[str] = Field(default_factory=list)  # e.g. ["Light & Clear"]
+    timestamp: Optional[datetime] = None
+
+
+class MobileJournalEntry(BaseModel):
+    """Maps to the `journal_entries` collection written by the Flutter app."""
+    id: str  # Firestore auto-generated document ID
+    userId: str  # Patient's Firebase Auth UID
+    therapistUid: Optional[str] = None  # Set once patient is linked
+    entry: str
+    prompt: Optional[str] = None  # The journaling prompt used, if any
+    timestamp: Optional[datetime] = None
