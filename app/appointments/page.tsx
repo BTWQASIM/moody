@@ -1,10 +1,10 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
 import { ProtectedRoute } from "@/app/protected-route"
 import { PortalShell } from "@/components/portal-shell"
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {
   useAppointments,
@@ -12,6 +12,7 @@ import {
   useCreateAppointment,
   useConfirmAppointment,
   useCancelAppointment,
+  useUpdateAppointment,
 } from "@/lib/hooks"
 import {
   Calendar,
@@ -70,6 +71,7 @@ interface Appointment {
   createdAt?: string | Date
   /** "mobile" when the request was created by the patient app */
   source?: string
+  portalPatientId?: string
 }
 
 interface Patient {
@@ -80,6 +82,42 @@ interface Patient {
   phone?: string
   profilePhoto?: string
   riskLevel?: string
+  firebaseUid?: string
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+function toDatetimeLocalValue(value?: string | Date) {
+  if (!value) return ""
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ""
+  const pad = (n: number) => String(n).padStart(2, "0")
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+function resolvePortalPatientId(
+  apt: Appointment,
+  patients: Patient[],
+): string | null {
+  if (apt.portalPatientId) return apt.portalPatientId
+  const byFirebase = patients.find((p) => p.firebaseUid === apt.patientId)
+  if (byFirebase?.id) return byFirebase.id
+  const byDocId = patients.find((p) => p.id === apt.patientId)
+  if (byDocId?.id) return byDocId.id
+  return null
+}
+
+function resolvePatientName(apt: Appointment, patients: Patient[]): string {
+  const portalId = resolvePortalPatientId(apt, patients)
+  const patient = patients.find(
+    (p) => p.id === portalId || p.firebaseUid === apt.patientId,
+  )
+  if (patient) {
+    return `${patient.firstName || ""} ${patient.lastName || ""}`.trim()
+  }
+  return apt.patientName || "Unknown Patient"
 }
 
 // ============================================================================
@@ -125,12 +163,8 @@ function AppointmentListView({
   const startIdx = (currentPage - 1) * itemsPerPage
   const paginatedAppointments = appointments.slice(startIdx, startIdx + itemsPerPage)
 
-  /** Resolve patient name: portal patients list first, then appointment's denormalized field. */
-  const getPatientName = (apt: Appointment): string => {
-    const patient = patients.find((p) => p.id === apt.patientId)
-    if (patient) return `${patient.firstName || ""} ${patient.lastName || ""}`.trim()
-    return apt.patientName || "Unknown Patient"
-  }
+  /** Resolve patient name from portal roster or appointment snapshot. */
+  const getPatientName = (apt: Appointment): string => resolvePatientName(apt, patients)
 
   const formatDateTime = (date?: string | Date): { date: string; time: string } => {
     if (!date) return { date: "", time: "" }
@@ -175,6 +209,7 @@ function AppointmentListView({
         const { date, time } = formatDateTime(apt.scheduledAt)
         const patientName = getPatientName(apt)
         const isMobileRequest = apt.source === "mobile"
+        const portalPatientId = resolvePortalPatientId(apt, patients)
 
         return (
           <Card
@@ -211,11 +246,28 @@ function AppointmentListView({
                   </div>
                 </div>
                 <div className="flex gap-2">
-                  <Link href={`/patients/${apt.patientId}`}>
-                    <Button size="sm" variant="outline">
+                  {portalPatientId ? (
+                    <Link
+                      href={`/patients/${portalPatientId}`}
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <Button size="sm" variant="outline" title="Open patient profile">
+                        <User className="size-4" />
+                      </Button>
+                    </Link>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      title="Accept the request to add this patient to your roster"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onSelectAppointment(apt)
+                      }}
+                    >
                       <User className="size-4" />
                     </Button>
-                  </Link>
+                  )}
                 </div>
               </div>
             </CardContent>
@@ -277,7 +329,10 @@ function AppointmentWeekView({
   })
 
   const getPatientName = (apt: Appointment): string => {
-    const patient = patients.find((p) => p.id === apt.patientId)
+    const portalId = resolvePortalPatientId(apt, patients)
+    const patient = patients.find(
+      (p) => p.id === portalId || p.firebaseUid === apt.patientId,
+    )
     if (patient) {
       const first = (patient.firstName || "")[0] ?? ""
       const last = (patient.lastName || "")[0] ?? ""
@@ -543,7 +598,18 @@ function AppointmentActionsDialog({
 }) {
   const { execute: confirmApt, loading: confirmLoading } = useConfirmAppointment()
   const { execute: cancelApt, loading: cancelLoading } = useCancelAppointment()
+  const { execute: updateApt, loading: updateLoading } = useUpdateAppointment()
   const [showConfirmCancel, setShowConfirmCancel] = useState(false)
+  const [rescheduleDate, setRescheduleDate] = useState("")
+  const [rescheduleDuration, setRescheduleDuration] = useState(60)
+  const [rescheduleError, setRescheduleError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!appointment) return
+    setRescheduleDate(toDatetimeLocalValue(appointment.scheduledAt))
+    setRescheduleDuration(appointment.duration || 60)
+    setRescheduleError(null)
+  }, [appointment])
 
   if (!appointment) return null
 
@@ -573,8 +639,30 @@ function AppointmentActionsDialog({
     }
   }
 
+  const handleReschedule = async () => {
+    if (!rescheduleDate) {
+      setRescheduleError("Choose a date and time.")
+      return
+    }
+
+    setRescheduleError(null)
+    try {
+      await updateApt({
+        appointmentId: appointment.id || "",
+        scheduledAt: new Date(rescheduleDate).toISOString(),
+        duration: rescheduleDuration,
+      })
+      await onActionComplete()
+      onOpenChange(false)
+    } catch (err) {
+      console.error("Failed to reschedule appointment:", err)
+      setRescheduleError("Could not update the appointment time.")
+    }
+  }
+
   const canConfirm = appointment.status === "pending"
   const canCancel = ["pending", "confirmed"].includes(appointment.status || "")
+  const canReschedule = appointment.status === "confirmed"
   const isCompleted = appointment.status === "completed"
   const isCancelled = appointment.status === "cancelled"
 
@@ -632,10 +720,23 @@ function AppointmentActionsDialog({
                 {appointment.notes}
               </p>
             )}
+            {appointment.status === "pending" && isMobileRequest && (
+              <p className="text-xs">
+                Accepting adds this patient to your Patients tab automatically.
+              </p>
+            )}
           </div>
         </DialogHeader>
 
         <div className="space-y-3">
+          {appointment.portalPatientId && (
+            <Link
+              href={`/patients/${appointment.portalPatientId}`}
+              className={cn(buttonVariants({ variant: "outline" }), "w-full")}
+            >
+              View patient profile
+            </Link>
+          )}
           {isCompleted && (
             <Alert>
               <CheckCircle className="size-4 text-green-600" />
@@ -659,6 +760,53 @@ function AppointmentActionsDialog({
               <CheckCircle className="size-4 mr-2" />
               {confirmLoading ? confirmingLabel : confirmLabel}
             </Button>
+          )}
+
+          {canReschedule && (
+            <div className="space-y-3 rounded-lg border border-border p-3">
+              <p className="text-sm font-medium">Reschedule session</p>
+              <p className="text-xs text-muted-foreground">
+                Changes sync instantly to the patient&apos;s mobile app.
+              </p>
+              <div className="space-y-2">
+                <Label htmlFor="reschedule-at">Date &amp; time</Label>
+                <Input
+                  id="reschedule-at"
+                  type="datetime-local"
+                  value={rescheduleDate}
+                  onChange={(e) => setRescheduleDate(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="reschedule-duration">Duration (minutes)</Label>
+                <Select
+                  value={String(rescheduleDuration)}
+                  onValueChange={(value) => setRescheduleDuration(Number(value))}
+                >
+                  <SelectTrigger id="reschedule-duration">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {[30, 45, 60, 90].map((minutes) => (
+                      <SelectItem key={minutes} value={String(minutes)}>
+                        {minutes} min
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              {rescheduleError ? (
+                <p className="text-xs text-destructive">{rescheduleError}</p>
+              ) : null}
+              <Button
+                onClick={handleReschedule}
+                disabled={updateLoading}
+                variant="secondary"
+                className="w-full"
+              >
+                {updateLoading ? "Saving…" : "Save new time"}
+              </Button>
+            </div>
           )}
 
           {canCancel && (
@@ -728,7 +876,7 @@ function AppointmentsPageContent() {
   const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null)
 
   const { data: appointments, loading: appointmentsLoading, error: appointmentsError, refetch: refetchAppointments } = useAppointments()
-  const { data: patients, loading: patientsLoading } = usePatients()
+  const { data: patients, loading: patientsLoading, refetch: refetchPatients } = usePatients()
 
   const appointmentsList = (appointments as Appointment[]) || []
   const patientsList = (patients as Patient[]) || []
@@ -910,7 +1058,7 @@ function AppointmentsPageContent() {
         appointment={selectedAppointment}
         onActionComplete={async () => {
           setSelectedAppointment(null)
-          await refetchAppointments()
+          await Promise.all([refetchAppointments(), refetchPatients()])
         }}
       />
     </PortalShell>

@@ -3,6 +3,7 @@
 import { ReactNode, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { useAuth } from "@/app/providers"
+import { terminatePortalSession } from "@/lib/auth-session"
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 
 type Role = "admin" | "therapist"
@@ -32,10 +33,27 @@ export function ProtectedRoute({
   }
 
   useEffect(() => {
-    if (redirectTo) {
-      router.replace(redirectTo)
+    if (!redirectTo) return
+
+    if (redirectTo === "/login") {
+      void terminatePortalSession().finally(() => {
+        router.replace("/login")
+      })
+      return
     }
+
+    router.replace(redirectTo)
   }, [redirectTo, router])
+
+  useEffect(() => {
+    function handlePageShow(event: PageTransitionEvent) {
+      if (!event.persisted || loading || user) return
+      router.replace("/login")
+    }
+
+    window.addEventListener("pageshow", handlePageShow)
+    return () => window.removeEventListener("pageshow", handlePageShow)
+  }, [loading, user, router])
 
   if (loading) {
     return (

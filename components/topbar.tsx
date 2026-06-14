@@ -3,7 +3,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react"
 import { Search, Bell, Menu } from "lucide-react"
 import { usePathname, useRouter } from "next/navigation"
-import { signOut } from "firebase/auth"
 import { useAuth } from "@/app/providers"
 import { Input } from "@/components/ui/input"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -20,7 +19,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
 import { Sidebar } from "@/components/sidebar"
-import { auth } from "@/lib/firebase"
+import { terminatePortalSession } from "@/lib/auth-session"
 
 type TherapistProfile = {
   name?: string
@@ -151,8 +150,8 @@ export function Topbar({ title, subtitle }: { title: string; subtitle?: string }
     .join("") || "TH"
 
   async function handleSignOut() {
-    await signOut(auth)
-    router.push("/login")
+    await terminatePortalSession()
+    router.replace("/login")
   }
 
   function handleSearchSubmit(event: FormEvent) {

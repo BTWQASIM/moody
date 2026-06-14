@@ -25,6 +25,8 @@ class AppointmentRequest(BaseModel):
 
 class AppointmentUpdate(BaseModel):
     status: Optional[AppointmentStatus] = None
+    scheduledAt: Optional[datetime] = None
+    duration: Optional[int] = None
     notes: Optional[str] = None
     sessionNotes: Optional[str] = None
     moodBefore: Optional[int] = None
@@ -70,8 +72,15 @@ async def list_appointments(
             appointments = [
                 a for a in appointments if a.get("therapistUid") in aliases
             ]
+            appointments = db.enrich_appointments_with_patient_refs(
+                therapist_uid, appointments
+            )
         else:
             appointments = db.get_appointments_for_therapist(therapist_uid, start_dt)
+
+        appointments = db.enrich_appointments_with_patient_refs(
+            therapist_uid, appointments
+        )
 
         return {
             "status": "success",
@@ -105,6 +114,11 @@ async def get_appointment(appointment_id: str, authorization: str = Header(...))
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to view this appointment",
             )
+
+        enriched = db.enrich_appointments_with_patient_refs(
+            therapist_uid, [appointment]
+        )
+        appointment = enriched[0] if enriched else appointment
 
         return {"status": "success", "appointment": appointment}
     except HTTPException:
@@ -225,12 +239,54 @@ async def update_appointment(
 async def confirm_appointment(
     appointment_id: str, authorization: str = Header(...)
 ):
-    """Confirm an appointment"""
-    return await update_appointment(
-        appointment_id,
-        AppointmentUpdate(status=AppointmentStatus.CONFIRMED),
-        authorization,
-    )
+    """Confirm an appointment and auto-add mobile patients to the therapist roster."""
+    decoded = verify_token(authorization)
+
+    try:
+        appointment = db.get_appointment(appointment_id)
+        if not appointment:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Appointment not found",
+            )
+
+        therapist_uid = decoded.get("uid")
+        aliases = db._therapist_uid_aliases(therapist_uid)
+        if appointment.get("therapistUid") not in aliases:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to update this appointment",
+            )
+
+        updates = {
+            "status": AppointmentStatus.CONFIRMED.value,
+            "confirmedAt": datetime.utcnow(),
+            "updatedAt": datetime.utcnow(),
+        }
+        db.update_appointment(appointment_id, updates)
+
+        portal_patient_id: Optional[str] = None
+        if appointment.get("source") == "mobile":
+            portal_patient_id = db.ensure_patient_from_mobile_appointment(
+                therapist_uid, appointment
+            )
+            db.update_appointment(
+                appointment_id,
+                {"portalPatientId": portal_patient_id},
+            )
+
+        return {
+            "status": "success",
+            "message": "Appointment confirmed successfully",
+            "portalPatientId": portal_patient_id,
+        }
+    except HTTPException:
+        raise
+    except Exception as err:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to confirm appointment: {str(err)}",
+        )
 
 
 @router.post("/{appointment_id}/cancel")

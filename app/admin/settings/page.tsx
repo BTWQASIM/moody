@@ -4,7 +4,6 @@ import { FormEvent, useEffect, useMemo, useState } from "react"
 import {
   EmailAuthProvider,
   reauthenticateWithCredential,
-  signOut,
   updatePassword,
   updateProfile,
 } from "firebase/auth"
@@ -13,6 +12,9 @@ import { ProtectedRoute } from "@/app/protected-route"
 import { useAuth } from "@/app/providers"
 import { PortalShell } from "@/components/portal-shell"
 import { auth } from "@/lib/firebase"
+import { terminatePortalSession } from "@/lib/auth-session"
+import { getPasswordValidationError } from "@/lib/password-policy"
+import { PasswordRequirements } from "@/components/password-requirements"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -97,8 +99,9 @@ function AdminSettingsContent() {
       return
     }
 
-    if (newPassword.length < 8) {
-      setError("New password must be at least 8 characters.")
+    const passwordError = getPasswordValidationError(newPassword)
+    if (passwordError) {
+      setError(passwordError)
       return
     }
 
@@ -132,7 +135,7 @@ function AdminSettingsContent() {
     setError(null)
 
     try {
-      await signOut(auth)
+      await terminatePortalSession()
       router.replace("/login")
     } catch (err: any) {
       setError(err.message || "Failed to log out.")
@@ -200,8 +203,10 @@ function AdminSettingsContent() {
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
                   autoComplete="new-password"
+                  minLength={8}
                   disabled={changingPassword}
                 />
+                <PasswordRequirements password={newPassword} className="pt-1" />
               </div>
               <div className="space-y-1">
                 <Label htmlFor="confirm-new-password">Confirm New Password</Label>

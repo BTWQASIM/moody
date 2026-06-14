@@ -10,6 +10,9 @@ from app.firebase import get_db_client
 from app.models import (
     TherapistProfile,
     PatientProfile,
+    PatientContactInfo,
+    PatientStatus,
+    RiskLevel,
     AppointmentDetails,
     ServiceOffering,
     MoodEntry,
@@ -111,6 +114,107 @@ class FirestoreDAO:
     # Patient Operations
     # ========================================================================
 
+    def _split_display_name(self, name: str) -> tuple[str, str]:
+        parts = (name or "").strip().split()
+        if not parts:
+            return "Patient", ""
+        if len(parts) == 1:
+            return parts[0], ""
+        return parts[0], " ".join(parts[1:])
+
+    def find_patient_by_firebase_uid(
+        self, therapist_uid: str, firebase_uid: str
+    ) -> Optional[Dict[str, Any]]:
+        """Find a portal patient linked to a mobile Firebase Auth UID."""
+        if not self.db:
+            return None
+
+        docs = (
+            self.db.collection("patients")
+            .where("therapistUid", "==", therapist_uid)
+            .stream()
+        )
+        for doc in docs:
+            data = cast(Any, doc).to_dict()
+            if not isinstance(data, dict):
+                continue
+            if data.get("firebaseUid") == firebase_uid:
+                data["id"] = cast(Any, doc).id
+                return data
+        return None
+
+    def ensure_patient_from_mobile_appointment(
+        self, therapist_uid: str, appointment: Dict[str, Any]
+    ) -> str:
+        """Create or update a portal patient when a mobile request is accepted."""
+        if not self.db:
+            raise Exception("Firestore not configured")
+
+        firebase_uid = str(appointment.get("patientId") or "").strip()
+        if not firebase_uid:
+            raise ValueError("Appointment is missing patientId")
+
+        existing = self.find_patient_by_firebase_uid(therapist_uid, firebase_uid)
+        if existing:
+            patient_id = str(existing["id"])
+            updates: Dict[str, Any] = {"status": PatientStatus.ACTIVE.value}
+            if appointment.get("patientName"):
+                first, last = self._split_display_name(
+                    str(appointment.get("patientName"))
+                )
+                updates["firstName"] = first
+                updates["lastName"] = last
+            if appointment.get("patientEmail"):
+                updates["email"] = appointment.get("patientEmail")
+            self.update_patient(patient_id, updates)
+        else:
+            user_doc = self.db.collection("users").document(firebase_uid).get()
+            user_data = user_doc.to_dict() if user_doc.exists else {}
+
+            display_name = (
+                str(appointment.get("patientName") or "")
+                or str((user_data or {}).get("name") or "")
+                or "Patient"
+            )
+            first_name, last_name = self._split_display_name(display_name)
+            email = (
+                str(appointment.get("patientEmail") or "")
+                or str((user_data or {}).get("email") or "")
+            )
+
+            profile = PatientProfile(
+                id="",
+                therapistUid=therapist_uid,
+                firebaseUid=firebase_uid,
+                firstName=first_name,
+                lastName=last_name,
+                dateOfBirth="",
+                email=email,
+                phone=str((user_data or {}).get("phone") or ""),
+                address="",
+                city="",
+                state="",
+                zipCode="",
+                emergencyContact=PatientContactInfo(
+                    emergencyName="",
+                    emergencyPhone="",
+                    emergencyRelation="",
+                ),
+                status=PatientStatus.ACTIVE,
+                riskLevel=RiskLevel.LOW,
+            )
+            patient_id = self.create_patient(profile)
+
+        try:
+            self.db.collection("users").document(firebase_uid).set(
+                {"therapistUid": therapist_uid},
+                merge=True,
+            )
+        except Exception:
+            pass
+
+        return patient_id
+
     def get_patient(self, patient_id: str) -> Optional[Dict[str, Any]]:
         """Get a patient profile by ID"""
         if not self.db:
@@ -137,13 +241,21 @@ class FirestoreDAO:
                 continue
             data["id"] = cast(Any, doc).id
             rows.append(data)
+        rows.sort(
+            key=lambda patient: (
+                str(patient.get("lastName", "")).lower(),
+                str(patient.get("firstName", "")).lower(),
+            )
+        )
         return rows
 
     def create_patient(self, profile: PatientProfile) -> str:
         """Create a new patient profile"""
         if not self.db:
             raise Exception("Firestore not configured")
-        doc_ref = self.db.collection("patients").add(profile.model_dump(by_alias=False))
+        doc_ref = self.db.collection("patients").add(
+            profile.model_dump(mode="json", by_alias=False)
+        )
         patient_id = doc_ref[1].id
         doc_ref[1].update({"id": patient_id})
         return patient_id
@@ -208,7 +320,43 @@ class FirestoreDAO:
         if not self.db:
             return None
         doc = self.db.collection("appointments").document(appointment_id).get()
-        return self._doc_data(doc)
+        data = self._doc_data(doc)
+        if data is not None:
+            data["id"] = appointment_id
+        return data
+
+    def enrich_appointments_with_patient_refs(
+        self, therapist_uid: str, appointments: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Attach portal patient IDs for mobile appointments and backfill roster entries."""
+        enriched: List[Dict[str, Any]] = []
+        for apt in appointments:
+            row = dict(apt)
+            apt_id = row.get("id")
+            firebase_uid = str(row.get("patientId") or "")
+
+            if (
+                not row.get("portalPatientId")
+                and row.get("source") == "mobile"
+                and firebase_uid
+            ):
+                patient = self.find_patient_by_firebase_uid(therapist_uid, firebase_uid)
+                if patient:
+                    row["portalPatientId"] = patient["id"]
+                elif row.get("status") == "confirmed" and apt_id:
+                    try:
+                        patient_id = self.ensure_patient_from_mobile_appointment(
+                            therapist_uid, row
+                        )
+                        row["portalPatientId"] = patient_id
+                        self.update_appointment(
+                            str(apt_id), {"portalPatientId": patient_id}
+                        )
+                    except Exception:
+                        pass
+
+            enriched.append(row)
+        return enriched
 
     def get_appointments_for_therapist(
         self, therapist_uid: str, start_date: Optional[datetime] = None
@@ -260,6 +408,15 @@ class FirestoreDAO:
         """Update appointment"""
         if not self.db:
             return False
+
+        if "scheduledAt" in updates:
+            scheduled = updates["scheduledAt"]
+            if isinstance(scheduled, str):
+                updates["scheduledAt"] = datetime.fromisoformat(
+                    scheduled.replace("Z", "+00:00")
+                )
+            updates["rescheduledAt"] = datetime.utcnow()
+
         updates["updatedAt"] = datetime.utcnow()
         self.db.collection("appointments").document(appointment_id).update(updates)
         return True

@@ -38,6 +38,18 @@ import { Label } from "@/components/ui/label"
 
 const ITEMS_PER_PAGE = 12
 
+type PatientRecord = {
+  id: string
+  firstName?: string
+  lastName?: string
+  email?: string
+  phoneNumber?: string
+  profilePhoto?: string
+  riskLevel?: string
+  status?: string
+  createdAt?: string
+}
+
 function PatientsContent() {
   const [refreshKey, setRefreshKey] = useState(0)
   const { data: patients, loading, error } = usePatients(refreshKey)
@@ -61,17 +73,23 @@ function PatientsContent() {
     phoneNumber: "",
   })
 
-  const patientList = patients || []
+  const patientList: PatientRecord[] = Array.isArray(patients) ? patients : []
 
   const filtered = useMemo(() => {
-    return patientList.filter((p: any) => {
-      const fullName = `${p.firstName} ${p.lastName}`.toLowerCase()
-      const matchesQuery = fullName.includes(query.toLowerCase()) ||
-        p.email.toLowerCase().includes(query.toLowerCase())
-      const matchesRisk = riskFilter === "all" || p.riskLevel === riskFilter
-      const matchesStatus = statusFilter === "all" || p.status === statusFilter
-      return matchesQuery && matchesRisk && matchesStatus
-    })
+    return patientList
+      .filter((p: any) => {
+        const fullName = `${p.firstName} ${p.lastName}`.toLowerCase()
+        const matchesQuery = fullName.includes(query.toLowerCase()) ||
+          (p.email || "").toLowerCase().includes(query.toLowerCase())
+        const matchesRisk = riskFilter === "all" || p.riskLevel === riskFilter
+        const matchesStatus = statusFilter === "all" || p.status === statusFilter
+        return matchesQuery && matchesRisk && matchesStatus
+      })
+      .sort((a: any, b: any) => {
+        const nameA = `${a.lastName || ""} ${a.firstName || ""}`.trim().toLowerCase()
+        const nameB = `${b.lastName || ""} ${b.firstName || ""}`.trim().toLowerCase()
+        return nameA.localeCompare(nameB)
+      })
   }, [patientList, query, riskFilter, statusFilter])
 
   const totalPages = Math.ceil(filtered.length / ITEMS_PER_PAGE)
@@ -171,6 +189,7 @@ function PatientsContent() {
           </div>
           <div className="flex gap-2">
             <Select value={riskFilter} onValueChange={(v) => {
+              if (!v) return
               setRiskFilter(v)
               setCurrentPage(1)
             }}>
@@ -188,6 +207,7 @@ function PatientsContent() {
             <Select
               value={statusFilter}
               onValueChange={(v) => {
+                if (!v) return
                 setStatusFilter(v)
                 setCurrentPage(1)
               }}

@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, status, Header
 from pydantic import BaseModel
 from firebase_admin import auth as firebase_auth, firestore
 from app.firebase import get_auth_client, get_db_client
+from app.password_policy import password_validation_error
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -687,6 +688,12 @@ async def update_therapist_credentials(
         if request.email:
             auth_updates["email"] = request.email
         if request.password:
+            password_error = password_validation_error(request.password)
+            if password_error:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=password_error,
+                )
             auth_updates["password"] = request.password
         if request.name:
             auth_updates["display_name"] = request.name

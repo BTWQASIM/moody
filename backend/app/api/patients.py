@@ -102,9 +102,13 @@ async def list_patients(authorization: str = Header(...)):
 async def get_patient(patient_id: str, authorization: str = Header(...)):
     """Get a specific patient profile"""
     decoded = verify_token(authorization)
+    therapist_uid = decoded.get("uid")
 
     try:
         patient = db.get_patient(patient_id)
+        if not patient:
+            # Mobile appointments may link using Firebase Auth UID instead of portal doc ID.
+            patient = db.find_patient_by_firebase_uid(therapist_uid, patient_id)
         if not patient:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -112,7 +116,7 @@ async def get_patient(patient_id: str, authorization: str = Header(...)):
             )
 
         # Verify therapist owns this patient
-        if patient.get("therapistUid") != decoded.get("uid"):
+        if patient.get("therapistUid") != therapist_uid:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to view this patient",

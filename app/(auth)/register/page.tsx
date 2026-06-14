@@ -27,6 +27,8 @@ import {
   toMobileAvailability,
   type DayAvailability,
 } from "@/lib/availability"
+import { getPasswordValidationError } from "@/lib/password-policy"
+import { PasswordRequirements } from "@/components/password-requirements"
 
 const specializationOptions = [
   "Anxiety",
@@ -158,6 +160,12 @@ export default function RegisterPage() {
 
   async function submitRegistration() {
     setError("")
+    const passwordError = getPasswordValidationError(formData.password)
+    if (passwordError) {
+      setError(passwordError)
+      return
+    }
+
     setLoading(true)
 
     try {
@@ -217,7 +225,9 @@ export default function RegisterPage() {
       } else if (firebaseErr.code === "auth/invalid-email") {
         message = "Please enter a valid email address."
       } else if (firebaseErr.code === "auth/weak-password") {
-        message = "Password must be at least 6 characters long."
+        message =
+          getPasswordValidationError(formData.password) ||
+          "Password does not meet security requirements."
       } else if (firebaseErr.code === "auth/operation-not-allowed") {
         message = "Email/password signup is not enabled. Please contact support."
       } else if (firebaseErr.code === "auth/too-many-requests") {
@@ -326,6 +336,12 @@ export default function RegisterPage() {
           key="register-step-1"
           onSubmit={(e) => {
             e.preventDefault()
+            const passwordError = getPasswordValidationError(formData.password)
+            if (passwordError) {
+              setError(passwordError)
+              return
+            }
+            setError("")
             setStep(2)
           }}
           className="space-y-4"
@@ -365,9 +381,12 @@ export default function RegisterPage() {
                 onChange={(e) => setFormData((prev) => ({ ...prev, password: e.target.value }))}
                 type="password"
                 required
+                minLength={8}
+                autoComplete="new-password"
                 placeholder="Choose a secure password"
                 className="bg-card"
               />
+              <PasswordRequirements password={formData.password} className="pt-1" />
             </div>
           </div>
           <div className="space-y-2">
