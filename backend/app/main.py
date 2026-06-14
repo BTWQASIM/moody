@@ -7,10 +7,11 @@ from app.api import health, auth, patients, appointments, services, mood, notes,
 
 app = FastAPI(title="Moody Therapist Portal API")
 
-# Setup CORS
+# Setup CORS — set CORS_ORIGINS env var in production (comma-separated URLs)
+_cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[origin.strip() for origin in _cors_origins.split(",") if origin.strip()],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

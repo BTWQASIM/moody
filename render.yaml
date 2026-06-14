@@ -1,0 +1,58 @@
+# Render Blueprint — Ping My Therapist web portal
+# Docs: https://render.com/docs/blueprint-spec
+#
+# Deploy: Render Dashboard → New → Blueprint → connect repo BTWQASIM/moody
+# Or create each Web Service manually using the settings below.
+
+services:
+  # Next.js therapist/admin portal (free tier)
+  - type: web
+    name: pingmytherapist-web
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      # Set your deployed API URL after the backend service is live:
+      - key: NEXT_PUBLIC_API_URL
+        sync: false
+      - key: NEXT_PUBLIC_FIREBASE_API_KEY
+        sync: false
+      - key: NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
+        value: pingmytherapist.firebaseapp.com
+      - key: NEXT_PUBLIC_FIREBASE_PROJECT_ID
+        value: pingmytherapist
+      - key: NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
+        value: pingmytherapist.firebasestorage.app
+      - key: NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID
+        sync: false
+      - key: NEXT_PUBLIC_FIREBASE_APP_ID
+        sync: false
+      - key: NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID
+        sync: false
+
+  # FastAPI backend (free tier) — optional but required for portal API features
+  - type: web
+    name: pingmytherapist-api
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.11"
+      - key: FIREBASE_PROJECT_ID
+        value: pingmytherapist
+      - key: FIREBASE_STORAGE_BUCKET
+        value: pingmytherapist.firebasestorage.app
+      # Paste the full service account JSON (single line) from Firebase Console:
+      - key: FIREBASE_CREDENTIALS_JSON
+        sync: false
+      # Comma-separated allowed frontend origins, e.g. https://pingmytherapist-web.onrender.com
+      - key: CORS_ORIGINS
+        sync: false
+      - key: ADMIN_BOOTSTRAP_ENABLED
+        value: "false"
