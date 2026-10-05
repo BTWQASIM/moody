@@ -12,9 +12,6 @@ from datetime import datetime
 from app.db import FirestoreDAO
 from app.tasks import (
     summarize_session_notes,
-    analyze_mood_entry,
-    generate_clinical_notes,
-    assess_patient_risk,
     extract_action_items,
     generate_progress_report,
 )
@@ -26,23 +23,6 @@ db = FirestoreDAO()
 class SummarizeNotesRequest(BaseModel):
     appointmentId: str
     content: str
-
-
-class AnalyzeMoodRequest(BaseModel):
-    moodEntryId: str
-    moodDescription: str
-
-
-class GenerateNotesRequest(BaseModel):
-    appointmentId: str
-    transcript: str
-    patientName: str
-    sessionDate: str
-
-
-class RiskAssessmentRequest(BaseModel):
-    patientId: str
-    context: str
 
 
 class ExtractItemsRequest(BaseModel):
@@ -119,125 +99,6 @@ async def submit_summarize_task(
         )
 
 
-@router.post("/analyze-mood")
-async def submit_mood_analysis(
-    request: AnalyzeMoodRequest,
-    authorization: str = Header(...),
-):
-    """
-    Queue a task to analyze mood entry for patterns and concerns
-    """
-    decoded = verify_token(authorization)
-
-    try:
-        # Submit task to Celery queue
-        task = analyze_mood_entry.delay(
-            request.moodEntryId, request.moodDescription
-        )
-
-        return {
-            "status": "queued",
-            "taskId": task.id,
-            "message": "Mood analysis task queued",
-        }
-    except Exception as err:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to queue task: {str(err)}",
-        )
-
-
-@router.post("/generate-notes")
-async def submit_clinical_notes(
-    request: GenerateNotesRequest,
-    authorization: str = Header(...),
-):
-    """
-    Queue a task to generate clinical notes from transcript
-    """
-    decoded = verify_token(authorization)
-    therapist_uid = decoded.get("uid")
-
-    try:
-        # Verify appointment belongs to therapist
-        appointment = db.get_appointment(request.appointmentId)
-        if not appointment:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Appointment not found",
-            )
-
-        if appointment.get("therapistUid") != therapist_uid:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Appointment does not belong to you",
-            )
-
-        # Submit task to Celery queue
-        task = generate_clinical_notes.delay(
-            request.appointmentId,
-            request.transcript,
-            request.patientName,
-            request.sessionDate,
-        )
-
-        return {
-            "status": "queued",
-            "taskId": task.id,
-            "message": "Clinical notes generation task queued",
-        }
-    except HTTPException:
-        raise
-    except Exception as err:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to queue task: {str(err)}",
-        )
-
-
-@router.post("/assess-risk")
-async def submit_risk_assessment(
-    request: RiskAssessmentRequest,
-    authorization: str = Header(...),
-):
-    """
-    Queue a task to assess patient risk level
-    """
-    decoded = verify_token(authorization)
-    therapist_uid = decoded.get("uid")
-
-    try:
-        # Verify patient belongs to therapist
-        patient = db.get_patient(request.patientId)
-        if not patient:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Patient not found",
-            )
-
-        if patient.get("therapistUid") != therapist_uid:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Patient does not belong to you",
-            )
-
-        # Submit task to Celery queue
-        task = assess_patient_risk.delay(request.patientId, request.context)
-
-        return {
-            "status": "queued",
-            "taskId": task.id,
-            "message": "Risk assessment task queued",
-        }
-    except HTTPException:
-        raise
-    except Exception as err:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to queue task: {str(err)}",
-        )
-
-
 @router.post("/extract-items")
 async def submit_extract_items(
     request: ExtractItemsRequest,
@@ -295,17 +156,32 @@ async def submit_progress_report(
     try:
         # Verify patient belongs to therapist
         patient = db.get_patient(request.patientId)
-        if not patient:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Patient not found",
+        if patient:
+            if patient.get("therapistUid") != therapist_uid:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Patient does not belong to you",
+                )
+        else:
+            appointment_docs = db.db.collection("appointments").where(
+                "patientId", "==", request.patientId
+            ).stream()
+            has_therapist_appointment = any(
+                (doc.to_dict() or {}).get("therapistUid") == therapist_uid
+                for doc in appointment_docs
             )
-
-        if patient.get("therapistUid") != therapist_uid:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Patient does not belong to you",
+            summary_docs = db.db.collection("clincal_summaries").where(
+                "patientID", "==", request.patientId
+            ).stream()
+            has_therapist_summary = any(
+                (doc.to_dict() or {}).get("therapistID") == therapist_uid
+                for doc in summary_docs
             )
+            if not (has_therapist_appointment or has_therapist_summary):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Patient does not belong to you",
+                )
 
         # Submit task to Celery queue
         task = generate_progress_report.delay(request.patientId, therapist_uid)

@@ -47,170 +47,38 @@ def summarize_session_notes(self, appointment_id: str, content: str):
         summary = gemini_client.summarize_text(content)
 
         if summary:
-            # Store summary in Firestore
+            generated_at = datetime.utcnow()
+            # Store summary in the appointment and existing clinical summary record.
             db.update_appointment(
                 appointment_id,
                 {
                     "sessionSummary": summary,
-                    "summarizedAt": datetime.utcnow(),
+                    "summarizedAt": generated_at,
+                    "generatedAt": generated_at,
                 },
+            )
+            db.save_ai_clinical_summary(
+                appointment_id,
+                summary,
+                generated_at,
+                self.request.id,
             )
 
             logger.info(f"Summary stored for appointment {appointment_id}")
-            return {"status": "completed", "appointmentId": appointment_id}
+            return {
+                "status": "completed",
+                "appointmentId": appointment_id,
+                "summary": summary,
+                "generatedAt": f"{generated_at.isoformat()}Z",
+            }
         else:
             raise Exception("Summarization returned None")
 
     except Exception as exc:
-        logger.error(f"Summarization task failed: {str(exc)}")
-        # Retry with exponential backoff
-        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
-
-
-@celery_app.task(bind=True, max_retries=3)
-def analyze_mood_entry(self, mood_entry_id: str, mood_description: str):
-    """
-    Analyze mood entry for patterns and concerns
-    
-    Args:
-        mood_entry_id: ID of the mood entry
-        mood_description: Description of the mood
-    """
-    try:
-        logger.info(f"Analyzing mood entry {mood_entry_id}")
-
-        analysis = gemini_client.analyze_mood(mood_description)
-
-        if analysis:
-            # Update mood entry with analysis
-            db.db.collection("moodEntries").document(mood_entry_id).update(
-                {
-                    "analysis": analysis,
-                    "analyzedAt": datetime.utcnow(),
-                }
-            )
-
-            logger.info(f"Analysis stored for mood entry {mood_entry_id}")
-            return {"status": "completed", "moodEntryId": mood_entry_id}
-        else:
-            raise Exception("Analysis returned None")
-
-    except Exception as exc:
-        logger.error(f"Mood analysis task failed: {str(exc)}")
-        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
-
-
-@celery_app.task(bind=True, max_retries=3)
-def generate_clinical_notes(
-    self,
-    appointment_id: str,
-    transcript: str,
-    patient_name: str,
-    session_date: str,
-):
-    """
-    Generate clinical notes from session transcript
-    
-    Args:
-        appointment_id: ID of the appointment
-        transcript: Session transcript or recording text
-        patient_name: Name of the patient
-        session_date: Date of the session
-    """
-    try:
-        logger.info(f"Generating clinical notes for appointment {appointment_id}")
-
-        notes = gemini_client.generate_session_notes(
-            transcript, patient_name, session_date
+        logger.error(
+            f"Summarization task failed for appointment {appointment_id}: {str(exc)}"
         )
-
-        if notes:
-            # Create clinical note in Firestore
-            from app.models import ClinicalNote
-
-            clinical_note = ClinicalNote(
-                id="",
-                patientId="",  # Will be set from appointment data
-                therapistUid="",  # Will be set from appointment data
-                appointmentId=appointment_id,
-                content=notes,
-                confidential=True,
-                tags=["ai_generated", "from_transcript"],
-                createdAt=datetime.utcnow(),
-                updatedAt=datetime.utcnow(),
-            )
-
-            note_id = db.create_clinical_note(clinical_note)
-
-            # Update appointment with reference to notes
-            db.update_appointment(
-                appointment_id,
-                {
-                    "clinicalNoteId": note_id,
-                    "notesGeneratedAt": datetime.utcnow(),
-                },
-            )
-
-            logger.info(f"Clinical notes stored for appointment {appointment_id}")
-            return {"status": "completed", "appointmentId": appointment_id}
-        else:
-            raise Exception("Note generation returned None")
-
-    except Exception as exc:
-        logger.error(f"Clinical notes generation failed: {str(exc)}")
-        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
-
-
-@celery_app.task(bind=True, max_retries=3)
-def assess_patient_risk(self, patient_id: str, context: str):
-    """
-    Assess risk level based on patient context
-    
-    Args:
-        patient_id: ID of the patient
-        context: Context for risk assessment (mood entries, notes, etc.)
-    """
-    try:
-        logger.info(f"Assessing risk for patient {patient_id}")
-
-        assessment = gemini_client.assess_risk_level(context)
-
-        if assessment:
-            # Store assessment in Firestore
-            from app.models import RiskAlert, RiskLevel
-
-            # Parse risk level from assessment
-            risk_level = RiskLevel.MEDIUM  # default
-            if "critical" in assessment.get("assessment", "").lower():
-                risk_level = RiskLevel.CRITICAL
-            elif "high" in assessment.get("assessment", "").lower():
-                risk_level = RiskLevel.HIGH
-            elif "low" in assessment.get("assessment", "").lower():
-                risk_level = RiskLevel.LOW
-
-            # Create alert if risk level is medium or higher
-            if risk_level in [RiskLevel.MEDIUM, RiskLevel.HIGH, RiskLevel.CRITICAL]:
-                alert = RiskAlert(
-                    id="",
-                    patientId=patient_id,
-                    therapistUid="",  # Will be set from patient data
-                    title="AI Risk Assessment Alert",
-                    description=assessment.get("assessment", ""),
-                    riskLevel=risk_level,
-                    source="ai_assessment",
-                    isAcknowledged=False,
-                    createdAt=datetime.utcnow(),
-                )
-
-                db.create_risk_alert(alert)
-                logger.info(f"Risk alert created for patient {patient_id}")
-
-            return {"status": "completed", "patientId": patient_id}
-        else:
-            raise Exception("Assessment returned None")
-
-    except Exception as exc:
-        logger.error(f"Risk assessment task failed: {str(exc)}")
+        # Retry with exponential backoff
         raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
 
 
@@ -239,7 +107,11 @@ def extract_action_items(self, appointment_id: str, content: str):
             )
 
             logger.info(f"Action items stored for appointment {appointment_id}")
-            return {"status": "completed", "appointmentId": appointment_id}
+            return {
+                "status": "completed",
+                "appointmentId": appointment_id,
+                "actionItems": action_items,
+            }
         else:
             raise Exception("Action item extraction returned None")
 
@@ -262,40 +134,45 @@ def generate_progress_report(
     try:
         logger.info(f"Generating progress report for patient {patient_id}")
 
-        # Fetch patient and recent sessions
-        patient = db.get_patient(patient_id)
-        appointments = db.get_appointments_for_therapist(therapist_uid)
-        patient_appointments = [
-            a for a in appointments if a.get("patientId") == patient_id
-        ]
-
-        # Gather session summaries
-        key_sessions = []
-        for appt in patient_appointments[-5:]:  # Last 5 sessions
-            if appt.get("sessionSummary"):
-                key_sessions.append(appt.get("sessionSummary"))
-
-        if not key_sessions:
+        sources = db.get_progress_report_sources(patient_id)
+        if not any(sources.values()):
             logger.warning(f"No sessions found for patient {patient_id}")
             return {"status": "no_data"}
 
+        patient = db.get_patient(patient_id) or {}
+        patient_name = " ".join(
+            part for part in [patient.get("firstName"), patient.get("lastName")] if part
+        ) or patient_id
+        key_sessions = [
+            {
+                "source": source_name,
+                "records": records,
+            }
+            for source_name, records in sources.items()
+            if records
+        ]
         report = gemini_client.prepare_progress_report(
-            patient.get("firstName", "") + " " + patient.get("lastName", ""),
-            len(patient_appointments),
+            patient_name,
+            sum(len(records) for records in sources.values()),
             key_sessions,
         )
 
         if report:
             # Store report in Firestore (could create reports collection)
-            db.db.collection("patients").document(patient_id).update(
-                {
-                    "lastProgressReport": report,
-                    "progressReportGeneratedAt": datetime.utcnow(),
-                }
-            )
+            if patient:
+                db.db.collection("patients").document(patient_id).update(
+                    {
+                        "lastProgressReport": report,
+                        "progressReportGeneratedAt": datetime.utcnow(),
+                    }
+                )
 
             logger.info(f"Progress report stored for patient {patient_id}")
-            return {"status": "completed", "patientId": patient_id}
+            return {
+                "status": "completed",
+                "patientId": patient_id,
+                "progressReport": report,
+            }
         else:
             raise Exception("Report generation returned None")
 

@@ -1,15 +1,15 @@
-# AI Job Pipeline with Google Gemini
+# AI Job Pipeline with OpenRouter
 
 ## Overview
 
-The Moody Therapist Portal implements an asynchronous AI job pipeline powered by Google's Gemini free tier models. This enables intelligent features like session summarization, mood analysis, clinical note generation, and risk assessment without blocking user interactions.
+The Moody Therapist Portal implements an asynchronous AI job pipeline powered by OpenRouter. This enables session summarization, action-item extraction, and progress reports without blocking user interactions.
 
 **Architecture:**
 - **Frontend**: React hooks submit tasks and poll for results
 - **Backend**: FastAPI endpoints queue jobs via Celery
 - **Queue**: Redis manages task distribution
-- **Workers**: Celery processes run Gemini API calls asynchronously
-- **AI**: Google Gemini 1.5 Flash (free tier) provides intelligence
+- **Workers**: Celery processes run OpenRouter API calls asynchronously
+- **AI**: OpenRouter `openrouter/free` provides intelligence
 
 ## Features
 
@@ -27,51 +27,7 @@ await execute({
 
 **Endpoint:** `POST /api/ai/summarize`
 
-### 2. Mood Analysis
-Analyzes mood entries for patterns, concerns, and risk indicators.
-
-```typescript
-const { execute, loading } = useAnalyzeMood();
-
-await execute({
-  moodEntryId: "mood_456",
-  moodDescription: "Feeling anxious and overwhelmed with work stress",
-});
-```
-
-**Endpoint:** `POST /api/ai/analyze-mood`
-
-### 3. Clinical Notes Generation
-Generates professional clinical notes from session transcripts.
-
-```typescript
-const { execute, loading } = useGenerateClinicalNotes();
-
-await execute({
-  appointmentId: "appt_123",
-  transcript: "Session audio transcript...",
-  patientName: "John Doe",
-  sessionDate: "2026-06-09",
-});
-```
-
-**Endpoint:** `POST /api/ai/generate-notes`
-
-### 4. Risk Assessment
-Evaluates patient context for risk factors and generates alerts.
-
-```typescript
-const { execute, loading } = useAssessRisk();
-
-await execute({
-  patientId: "patient_789",
-  context: "Recent mood entries and session notes...",
-});
-```
-
-**Endpoint:** `POST /api/ai/assess-risk`
-
-### 5. Action Item Extraction
+### 2. Action Item Extraction
 Extracts concrete action items from session content.
 
 ```typescript
@@ -85,7 +41,7 @@ await execute({
 
 **Endpoint:** `POST /api/ai/extract-items`
 
-### 6. Progress Report Generation
+### 3. Progress Report Generation
 Generates comprehensive progress reports from multiple sessions.
 
 ```typescript
@@ -133,18 +89,15 @@ settings.celery_broker_url  # Redis connection
 settings.debug  # Debug mode flag
 ```
 
-### Gemini AI Client (`app/ai.py`)
+### OpenRouter AI Client (`app/ai.py`)
 
-Wrapper around Google Generative AI library with specialized methods:
+Wrapper around the OpenRouter API with specialized methods:
 
 ```python
 from app.ai import gemini_client
 
-# All methods return None if Gemini is disabled
+# All methods return None when OpenRouter is unavailable
 summary = gemini_client.summarize_text(content)
-analysis = gemini_client.analyze_mood(description)
-notes = gemini_client.generate_session_notes(transcript, name, date)
-risk = gemini_client.assess_risk_level(context)
 items = gemini_client.extract_action_items(content)
 report = gemini_client.prepare_progress_report(name, count, sessions)
 ```
@@ -152,7 +105,7 @@ report = gemini_client.prepare_progress_report(name, count, sessions)
 **Error Handling:**
 - If API key is not set, all methods return `None`
 - Failed API calls log errors and return `None`
-- Gemini model used: `gemini-1.5-flash` (free tier)
+- OpenRouter model used: `openrouter/free`
 
 ### Celery Tasks (`app/tasks.py`)
 
@@ -178,9 +131,6 @@ REST endpoints for submitting and monitoring tasks:
 
 ```
 POST /api/ai/summarize               - Queue summarization
-POST /api/ai/analyze-mood            - Queue mood analysis
-POST /api/ai/generate-notes          - Queue note generation
-POST /api/ai/assess-risk             - Queue risk assessment
 POST /api/ai/extract-items           - Queue action item extraction
 POST /api/ai/progress-report         - Queue progress report
 GET  /api/ai/task-status/{taskId}    - Check task status
@@ -200,8 +150,6 @@ All endpoints:
 # Backend
 pip install -r requirements.txt
 
-# The following packages are added:
-# - google-generativeai>=0.3.0
 # - pydantic-settings>=2.0.0
 ```
 

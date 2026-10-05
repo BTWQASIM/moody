@@ -421,6 +421,68 @@ class FirestoreDAO:
         self.db.collection("appointments").document(appointment_id).update(updates)
         return True
 
+    def save_ai_clinical_summary(
+        self,
+        appointment_id: str,
+        summary: str,
+        generated_at: datetime,
+        task_id: str,
+    ) -> None:
+        """Create an idempotent AI summary and retain the latest three unsigned entries."""
+        if not self.db:
+            raise Exception("Firestore not configured")
+
+        appointment = self.get_appointment(appointment_id)
+        if not appointment:
+            raise ValueError(f"Appointment not found: {appointment_id}")
+
+        collection = self.db.collection("clincal_summaries")
+        summary_data = {
+            "appointmentID": appointment_id,
+            "patientID": appointment.get("patientId"),
+            "therapistID": appointment.get("therapistUid"),
+            "generatedNotes": summary,
+            "reviewedAndSigned": False,
+            "timestamp": generated_at,
+            "taskID": task_id,
+        }
+
+        @firestore.transactional
+        def create_if_missing(transaction: Any) -> bool:
+            matches = list(
+                transaction.get(
+                    collection.where("appointmentID", "==", appointment_id)
+                )
+            )
+            if any(
+                (document.to_dict() or {}).get("taskID") == task_id
+                for document in matches
+            ):
+                return False
+
+            transaction.create(collection.document(), summary_data)
+            return True
+
+        if not create_if_missing(self.db.transaction()):
+            return
+
+        updated_matches = list(
+            collection.where("appointmentID", "==", appointment_id).stream()
+        )
+        unsigned_matches = [
+            document
+            for document in updated_matches
+            if (document.to_dict() or {}).get("reviewedAndSigned") is not True
+        ]
+        unsigned_matches.sort(
+            key=lambda document: self._scheduled_at_epoch(
+                (document.to_dict() or {}).get("timestamp")
+            ),
+            reverse=True,
+        )
+        for document in unsigned_matches[3:]:
+            document.reference.delete()
+
     # ========================================================================
     # Service Operations
     # ========================================================================
@@ -701,6 +763,45 @@ class FirestoreDAO:
             rows.append(data)
         rows = self._sort_by_datetime_field(rows, "timestamp", reverse=True)
         return rows[:limit]
+
+    def get_progress_report_sources(
+        self, patient_id: str, limit: int = 30
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """Read existing mood, journal, and clinical records for a patient."""
+        if not self.db:
+            return {"mood_checkins": [], "journals": [], "clinical_summaries": []}
+
+        firebase_uids: set[str] = set()
+        patient = self.get_patient(patient_id)
+        if patient and patient.get("firebaseUid"):
+            firebase_uids.add(str(patient["firebaseUid"]))
+
+        mood_checkins: List[Dict[str, Any]] = []
+        for firebase_uid in firebase_uids:
+            mood_checkins.extend(self.get_mobile_mood_checkins(firebase_uid, limit))
+
+        journals: List[Dict[str, Any]] = []
+        docs = self.db.collection("journals").where(
+            "patientID", "==", patient_id
+        ).stream()
+        journals.extend(self._stream_data(docs))
+
+        clinical_docs = self.db.collection("clincal_summaries").where(
+            "patientID", "==", patient_id
+        ).stream()
+        clinical_summaries = self._stream_data(clinical_docs)
+
+        return {
+            "mood_checkins": self._sort_by_datetime_field(
+                mood_checkins, "timestamp", reverse=True
+            )[:limit],
+            "journals": self._sort_by_datetime_field(
+                journals, "timestamp", reverse=True
+            )[:limit],
+            "clinical_summaries": self._sort_by_datetime_field(
+                clinical_summaries, "timestamp", reverse=True
+            )[:limit],
+        }
 
     def link_patient_firebase_uid(
         self, patient_id: str, firebase_uid: str

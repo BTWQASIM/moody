@@ -68,6 +68,7 @@ interface Appointment {
   status?: string
   notes?: string
   sessionNotes?: string
+  sessionSummary?: string
   createdAt?: string | Date
   /** "mobile" when the request was created by the patient app */
   source?: string
@@ -719,6 +720,14 @@ function AppointmentActionsDialog({
                 <span className="font-medium text-foreground">Note:</span>{" "}
                 {appointment.notes}
               </p>
+            )}
+            {appointment.sessionSummary && (
+              <div className="mt-3 rounded-lg border bg-muted/50 p-3">
+                <p className="font-medium text-foreground">AI Generated Summary</p>
+                <p className="mt-1 whitespace-pre-wrap text-sm">
+                  {appointment.sessionSummary}
+                </p>
+              </div>
             )}
             {appointment.status === "pending" && isMobileRequest && (
               <p className="text-xs">

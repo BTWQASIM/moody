@@ -370,34 +370,6 @@ export const aiAPI = {
     });
   },
 
-  async submitMoodAnalysis(moodEntryId: string, moodDescription: string) {
-    return apiCall("/api/ai/analyze-mood", "POST", {
-      moodEntryId,
-      moodDescription,
-    });
-  },
-
-  async submitGenerateNotes(
-    appointmentId: string,
-    transcript: string,
-    patientName: string,
-    sessionDate: string
-  ) {
-    return apiCall("/api/ai/generate-notes", "POST", {
-      appointmentId,
-      transcript,
-      patientName,
-      sessionDate,
-    });
-  },
-
-  async submitRiskAssessment(patientId: string, context: string) {
-    return apiCall("/api/ai/assess-risk", "POST", {
-      patientId,
-      context,
-    });
-  },
-
   async submitExtractItems(appointmentId: string, content: string) {
     return apiCall("/api/ai/extract-items", "POST", {
       appointmentId,

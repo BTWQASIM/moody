@@ -18,6 +18,7 @@ import {
   uploadsAPI,
   aiAPI,
 } from "./api";
+import { normalizeTaskStatus } from "./task-status";
 
 interface UseQueryState<T> {
   data: T | null;
@@ -53,8 +54,12 @@ function useQuery<T>(
         setState((prev) => ({ ...prev, loading: true, error: null }));
         const result = await queryFn();
         if (mounted) {
+          const normalizedResult =
+            result && typeof result.status === "string"
+              ? { ...result, status: normalizeTaskStatus(result.status) }
+              : result;
           setState({
-            data: result,
+            data: normalizedResult,
             loading: false,
             error: null,
           });
@@ -62,8 +67,8 @@ function useQuery<T>(
           // Set up polling if requested and data indicates task is still running
           if (
             pollInterval &&
-            result.status &&
-            ["pending", "started"].includes(result.status)
+            normalizedResult.status &&
+            ["pending", "processing"].includes(normalizedResult.status)
           ) {
             pollTimeout = setTimeout(fetch, pollInterval);
           }
@@ -248,7 +253,7 @@ interface UseMutationState<T> {
   data: T | null;
   loading: boolean;
   error: Error | null;
-  execute: (data: any) => Promise<void>;
+  execute: (data: any) => Promise<T>;
 }
 
 function useMutation<T>(
@@ -258,7 +263,9 @@ function useMutation<T>(
     data: null,
     loading: false,
     error: null,
-    execute: async () => {},
+    execute: async () => {
+      throw new Error("Mutation is not initialized");
+    },
   });
 
   const execute = useCallback(
@@ -275,6 +282,7 @@ function useMutation<T>(
           data: result,
           loading: false,
         }));
+        return result;
       } catch (err) {
         const error =
           err instanceof Error ? err : new Error(String(err));
@@ -472,49 +480,6 @@ export function useSummarizeNotes() {
   return useMutation(
     ({ appointmentId, content }: { appointmentId: string; content: string }) =>
       aiAPI.submitSummarizeTask(appointmentId, content)
-  );
-}
-
-/**
- * Hook for submitting mood analysis task
- */
-export function useAnalyzeMood() {
-  return useMutation(
-    ({ moodEntryId, moodDescription }: {
-      moodEntryId: string;
-      moodDescription: string;
-    }) =>
-      aiAPI.submitMoodAnalysis(moodEntryId, moodDescription)
-  );
-}
-
-/**
- * Hook for submitting clinical notes generation
- */
-export function useGenerateClinicalNotes() {
-  return useMutation(
-    ({ appointmentId, transcript, patientName, sessionDate }: {
-      appointmentId: string;
-      transcript: string;
-      patientName: string;
-      sessionDate: string;
-    }) =>
-      aiAPI.submitGenerateNotes(
-        appointmentId,
-        transcript,
-        patientName,
-        sessionDate
-      )
-  );
-}
-
-/**
- * Hook for submitting risk assessment
- */
-export function useAssessRisk() {
-  return useMutation(
-    ({ patientId, context }: { patientId: string; context: string }) =>
-      aiAPI.submitRiskAssessment(patientId, context)
   );
 }
 

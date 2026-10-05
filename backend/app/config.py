@@ -19,8 +19,8 @@ class Settings(BaseSettings):
         "FIREBASE_STORAGE_BUCKET", "pingmytherapist.firebasestorage.app"
     )
 
-    # Gemini AI
-    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
+    # OpenRouter AI
+    openrouter_api_key: str = ""
 
     # Celery
     celery_broker_url: str = os.getenv(
