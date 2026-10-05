@@ -48,6 +48,7 @@ import {
 import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
 import { normalizeTaskStatus, type TaskStatus } from "@/lib/task-status"
+import { getResolvedPatientName } from "@/lib/patient-mapping"
 
 // ============================================================================
 // Type Definitions
@@ -63,6 +64,8 @@ interface Patient {
 interface Appointment {
   id?: string
   patientId?: string
+  portalPatientId?: string
+  patientName?: string
   scheduledAt?: string
   type?: string
 }
@@ -219,16 +222,19 @@ function SummarizeNotesTab({ appointments, patients }: { appointments: Appointme
     }
   }
 
-  const getPatientName = (patientId?: string) => {
-    const patient = patients.find((p) => p.id === patientId)
-    return patient ? `${patient.firstName} ${patient.lastName}` : "Unknown"
-  }
+  const appointmentOptions = appointments.flatMap((apt) => {
+    const patientName = getResolvedPatientName(apt, patients)
 
-  const appointmentOptions = appointments.map((apt) => ({
-    id: apt.id,
-    label: `${getPatientName(apt.patientId)} - ${apt.type || "Session"}`,
-    date: new Date(apt.scheduledAt || "").toLocaleDateString(),
-  }))
+    if (!apt.id || !patientName) {
+      return []
+    }
+
+    return [{
+      id: apt.id,
+      label: `${patientName} - ${apt.type || "Session"}`,
+      date: new Date(apt.scheduledAt || "").toLocaleDateString(),
+    }]
+  })
 
   return (
     <div className="space-y-4">
@@ -354,16 +360,19 @@ function ExtractActionItemsTab({ appointments, patients }: { appointments: Appoi
     }
   }
 
-  const getPatientName = (patientId?: string) => {
-    const patient = patients.find((p) => p.id === patientId)
-    return patient ? `${patient.firstName} ${patient.lastName}` : "Unknown"
-  }
+  const appointmentOptions = appointments.flatMap((apt) => {
+    const patientName = getResolvedPatientName(apt, patients)
 
-  const appointmentOptions = appointments.map((apt) => ({
-    id: apt.id,
-    label: `${getPatientName(apt.patientId)} - ${apt.type || "Session"}`,
-    date: new Date(apt.scheduledAt || "").toLocaleDateString(),
-  }))
+    if (!apt.id || !patientName) {
+      return []
+    }
+
+    return [{
+      id: apt.id,
+      label: `${patientName} - ${apt.type || "Session"}`,
+      date: new Date(apt.scheduledAt || "").toLocaleDateString(),
+    }]
+  })
 
   return (
     <div className="space-y-4">

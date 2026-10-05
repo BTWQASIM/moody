@@ -292,23 +292,27 @@ class FirestoreDAO:
         if not self.db:
             return aliases
 
-        doc = self.db.collection("therapists").document(therapist_uid).get()
-        if doc.exists:
-            data = doc.to_dict() or {}
-            aliases.add(doc.id)
-            profile_uid = data.get("uid")
-            if isinstance(profile_uid, str) and profile_uid:
-                aliases.add(profile_uid)
-
         matches = (
             self.db.collection("therapists")
             .where("uid", "==", therapist_uid)
             .stream()
         )
+        matched_document_ids: set[str] = set()
         for match in matches:
-            aliases.add(cast(Any, match).id)
+            match_id = cast(Any, match).id
+            matched_document_ids.add(match_id)
+            aliases.add(match_id)
             data = cast(Any, match).to_dict()
             if isinstance(data, dict):
+                profile_uid = data.get("uid")
+                if isinstance(profile_uid, str) and profile_uid:
+                    aliases.add(profile_uid)
+
+        if therapist_uid not in matched_document_ids:
+            doc = self.db.collection("therapists").document(therapist_uid).get()
+            if doc.exists:
+                data = doc.to_dict() or {}
+                aliases.add(doc.id)
                 profile_uid = data.get("uid")
                 if isinstance(profile_uid, str) and profile_uid:
                     aliases.add(profile_uid)
@@ -326,13 +330,24 @@ class FirestoreDAO:
         return data
 
     def enrich_appointments_with_patient_refs(
-        self, therapist_uid: str, appointments: List[Dict[str, Any]]
+        self,
+        therapist_uid: str,
+        appointments: List[Dict[str, Any]],
+        patients: Optional[List[Dict[str, Any]]] = None,
     ) -> List[Dict[str, Any]]:
-        """Attach portal patient IDs for mobile appointments and backfill roster entries."""
+        """Attach existing portal patient IDs for mobile appointments."""
+        patients_by_firebase_uid = {
+            str(patient.get("firebaseUid")): patient
+            for patient in (
+                patients
+                if patients is not None
+                else self.get_patients_for_therapist(therapist_uid)
+            )
+            if patient.get("firebaseUid")
+        }
         enriched: List[Dict[str, Any]] = []
         for apt in appointments:
             row = dict(apt)
-            apt_id = row.get("id")
             firebase_uid = str(row.get("patientId") or "")
 
             if (
@@ -340,20 +355,9 @@ class FirestoreDAO:
                 and row.get("source") == "mobile"
                 and firebase_uid
             ):
-                patient = self.find_patient_by_firebase_uid(therapist_uid, firebase_uid)
+                patient = patients_by_firebase_uid.get(firebase_uid)
                 if patient:
                     row["portalPatientId"] = patient["id"]
-                elif row.get("status") == "confirmed" and apt_id:
-                    try:
-                        patient_id = self.ensure_patient_from_mobile_appointment(
-                            therapist_uid, row
-                        )
-                        row["portalPatientId"] = patient_id
-                        self.update_appointment(
-                            str(apt_id), {"portalPatientId": patient_id}
-                        )
-                    except Exception:
-                        pass
 
             enriched.append(row)
         return enriched
@@ -366,16 +370,20 @@ class FirestoreDAO:
             return []
 
         aliases = self._therapist_uid_aliases(therapist_uid)
-        docs = self.db.collection("appointments").stream()
-        rows: List[Dict[str, Any]] = []
-        for doc in docs:
-            data = cast(Any, doc).to_dict()
-            if not isinstance(data, dict):
-                continue
-            if data.get("therapistUid") not in aliases:
-                continue
-            data["id"] = cast(Any, doc).id
-            rows.append(data)
+        rows_by_id: Dict[str, Dict[str, Any]] = {}
+        for alias in aliases:
+            docs = (
+                self.db.collection("appointments")
+                .where("therapistUid", "==", alias)
+                .stream()
+            )
+            for doc in docs:
+                data = cast(Any, doc).to_dict()
+                if not isinstance(data, dict):
+                    continue
+                data["id"] = cast(Any, doc).id
+                rows_by_id[data["id"]] = data
+        rows = list(rows_by_id.values())
 
         if start_date:
             threshold = self._scheduled_at_epoch(start_date)

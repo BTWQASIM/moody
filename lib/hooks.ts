@@ -5,7 +5,8 @@
 
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { onAuthStateChanged } from "firebase/auth";
 import {
   patientAPI,
   appointmentAPI,
@@ -19,6 +20,94 @@ import {
   aiAPI,
 } from "./api";
 import { normalizeTaskStatus } from "./task-status";
+import { auth } from "./firebase";
+
+const QUERY_STALE_TIME_MS = 30_000;
+const MAX_QUERY_CACHE_ENTRIES = 50;
+
+interface QueryCacheEntry {
+  data: unknown;
+  cachedAt: number;
+}
+
+const queryCache = new Map<string, QueryCacheEntry>();
+const inFlightQueries = new Map<string, Promise<unknown>>();
+const queryGenerations = new Map<string, number>();
+let activeAuthUid: string | null | undefined;
+
+onAuthStateChanged(auth, (user) => {
+  const nextAuthUid = user?.uid ?? null;
+  if (activeAuthUid !== undefined && activeAuthUid !== nextAuthUid) {
+    queryCache.clear();
+    inFlightQueries.clear();
+    queryGenerations.clear();
+  }
+  activeAuthUid = nextAuthUid;
+});
+
+function getQueryCacheKey(queryKey: string, dependencies: unknown[]) {
+  const authUid = auth.currentUser?.uid;
+  return authUid
+    ? `${authUid}:${queryKey}:${JSON.stringify(dependencies)}`
+    : null;
+}
+
+function removeStaleQueryCacheEntries(now: number) {
+  for (const [key, entry] of queryCache) {
+    if (now - entry.cachedAt >= QUERY_STALE_TIME_MS) {
+      queryCache.delete(key);
+    }
+  }
+}
+
+function storeQueryResult(key: string, data: unknown) {
+  const now = Date.now();
+  removeStaleQueryCacheEntries(now);
+  queryCache.set(key, { data, cachedAt: now });
+  while (queryCache.size > MAX_QUERY_CACHE_ENTRIES) {
+    const oldestKey = queryCache.keys().next().value;
+    if (!oldestKey) break;
+    queryCache.delete(oldestKey);
+  }
+}
+
+function runSharedQuery<T>(
+  key: string,
+  queryFn: () => Promise<T>,
+  forceRefresh: boolean
+): Promise<T> {
+  const now = Date.now();
+  if (!forceRefresh) {
+    const cached = queryCache.get(key);
+    if (cached) {
+      if (now - cached.cachedAt < QUERY_STALE_TIME_MS) {
+        return Promise.resolve(cached.data as T);
+      }
+      queryCache.delete(key);
+    }
+
+    const inFlight = inFlightQueries.get(key);
+    if (inFlight) return inFlight as Promise<T>;
+  }
+
+  const generation = (queryGenerations.get(key) ?? 0) + 1;
+  queryGenerations.set(key, generation);
+  const request = queryFn()
+    .then((result) => {
+      if (queryGenerations.get(key) === generation) {
+        storeQueryResult(key, result);
+      }
+      return result;
+    })
+    .finally(() => {
+      if (inFlightQueries.get(key) === request) {
+        inFlightQueries.delete(key);
+      }
+    });
+
+  inFlightQueries.set(key, request);
+  return request;
+}
 
 interface UseQueryState<T> {
   data: T | null;
@@ -30,6 +119,7 @@ interface UseQueryState<T> {
  * Generic hook for fetching data
  */
 function useQuery<T>(
+  queryKey: string,
   queryFn: () => Promise<any>,
   dependencies: any[] = [],
   pollInterval: number | null = null
@@ -40,6 +130,7 @@ function useQuery<T>(
     error: null,
   });
   const [reloadToken, setReloadToken] = useState(0);
+  const previousReloadToken = useRef(0);
 
   const refetch = useCallback(async () => {
     setReloadToken((token) => token + 1);
@@ -52,7 +143,13 @@ function useQuery<T>(
     const fetch = async () => {
       try {
         setState((prev) => ({ ...prev, loading: true, error: null }));
-        const result = await queryFn();
+        const cacheKey = getQueryCacheKey(queryKey, dependencies);
+        const forceRefresh = reloadToken !== previousReloadToken.current;
+        previousReloadToken.current = reloadToken;
+        const result =
+          pollInterval || !cacheKey
+            ? await queryFn()
+            : await runSharedQuery(cacheKey, queryFn, forceRefresh);
         if (mounted) {
           const normalizedResult =
             result && typeof result.status === "string"
@@ -99,6 +196,7 @@ function useQuery<T>(
  */
 export function usePatients(refreshKey = 0) {
   return useQuery(
+    "patients",
     () => patientAPI.list().then((res) => res.patients || []),
     [refreshKey]
   );
@@ -109,6 +207,7 @@ export function usePatients(refreshKey = 0) {
  */
 export function usePatient(patientId: string | null) {
   return useQuery(
+    "patient",
     () =>
       patientId
         ? patientAPI.get(patientId).then((res) => res.patient ?? null)
@@ -126,6 +225,7 @@ export function useAppointments(filters?: {
   endDate?: string;
 }) {
   return useQuery(
+    "appointments",
     () =>
       appointmentAPI
         .list(filters)
@@ -139,6 +239,7 @@ export function useAppointments(filters?: {
  */
 export function useAppointment(appointmentId: string | null) {
   return useQuery(
+    "appointment",
     () =>
       appointmentId
         ? appointmentAPI.get(appointmentId)
@@ -151,7 +252,9 @@ export function useAppointment(appointmentId: string | null) {
  * Hook for listing services
  */
 export function useServices() {
-  return useQuery(() => serviceAPI.list().then((res) => res.services || []));
+  return useQuery("services", () =>
+    serviceAPI.list().then((res) => res.services || [])
+  );
 }
 
 /**
@@ -164,6 +267,7 @@ export function usePatientMobileActivity(
   refreshKey = 0
 ) {
   return useQuery(
+    "patient-mobile-activity",
     () =>
       patientId
         ? patientAPI
@@ -183,6 +287,7 @@ export function usePatientMobileActivity(
  */
 export function useMoodEntries(patientId: string | null) {
   return useQuery(
+    "mood-entries",
     () =>
       patientId
         ? moodAPI.list(patientId).then((res) => res.entries || [])
@@ -196,6 +301,7 @@ export function useMoodEntries(patientId: string | null) {
  */
 export function useClinicalNotes(patientId: string | null) {
   return useQuery(
+    "clinical-notes",
     () =>
       patientId
         ? notesAPI.list(patientId).then((res) => res.notes || [])
@@ -208,7 +314,7 @@ export function useClinicalNotes(patientId: string | null) {
  * Hook for listing risk alerts
  */
 export function useRiskAlerts() {
-  return useQuery(() =>
+  return useQuery("risk-alerts", () =>
     alertsAPI.list().then((res) => res.alerts || [])
   );
 }
@@ -217,7 +323,7 @@ export function useRiskAlerts() {
  * Hook for listing message threads
  */
 export function useMessageThreads() {
-  return useQuery(() =>
+  return useQuery("message-threads", () =>
     messagesAPI.listThreads().then((res) => res.threads || [])
   );
 }
@@ -227,6 +333,7 @@ export function useMessageThreads() {
  */
 export function useThreadMessages(threadId: string | null) {
   return useQuery(
+    "thread-messages",
     () =>
       threadId
         ? messagesAPI
@@ -241,7 +348,7 @@ export function useThreadMessages(threadId: string | null) {
  * Hook for notifications
  */
 export function useNotifications() {
-  return useQuery(() =>
+  return useQuery("notifications", () =>
     notificationsAPI.list().then((res) => res.notifications || [])
   );
 }
@@ -507,6 +614,7 @@ export function useGenerateProgressReport() {
  */
 export function useTaskStatus(taskId: string | null) {
   return useQuery(
+    "task-status",
     () =>
       taskId
         ? aiAPI.getTaskStatus(taskId)

@@ -48,6 +48,10 @@ import {
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import {
+  resolvePatientForAppointment,
+  resolvePortalPatientId,
+} from "@/lib/patient-mapping"
 
 // ============================================================================
 // Type Definitions
@@ -98,23 +102,8 @@ function toDatetimeLocalValue(value?: string | Date) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
-function resolvePortalPatientId(
-  apt: Appointment,
-  patients: Patient[],
-): string | null {
-  if (apt.portalPatientId) return apt.portalPatientId
-  const byFirebase = patients.find((p) => p.firebaseUid === apt.patientId)
-  if (byFirebase?.id) return byFirebase.id
-  const byDocId = patients.find((p) => p.id === apt.patientId)
-  if (byDocId?.id) return byDocId.id
-  return null
-}
-
 function resolvePatientName(apt: Appointment, patients: Patient[]): string {
-  const portalId = resolvePortalPatientId(apt, patients)
-  const patient = patients.find(
-    (p) => p.id === portalId || p.firebaseUid === apt.patientId,
-  )
+  const patient = resolvePatientForAppointment(apt, patients)
   if (patient) {
     return `${patient.firstName || ""} ${patient.lastName || ""}`.trim()
   }

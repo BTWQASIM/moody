@@ -26,6 +26,17 @@ uvicorn app.main:app --reload --port 8000
 
 Health check: http://localhost:8000/health
 
+Start Redis and the Celery worker for AI background tasks:
+
+```bash
+redis-server --bind 127.0.0.1 --port 6379
+celery -A app.tasks:celery_app worker --loglevel=INFO --pool=solo
+```
+
+The worker uses `CELERY_BROKER_URL` on Redis database 0 and
+`CELERY_RESULT_BACKEND` on Redis database 1. Redis must be running before
+submitting AI tasks.
+
 ## Docker
 
 From the `web` directory:

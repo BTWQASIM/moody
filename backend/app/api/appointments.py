@@ -3,6 +3,7 @@ Appointment management API endpoints
 """
 
 from typing import Optional
+import asyncio
 from fastapi import APIRouter, HTTPException, status, Header, Query
 from firebase_admin import auth as firebase_auth
 from pydantic import BaseModel
@@ -72,14 +73,17 @@ async def list_appointments(
             appointments = [
                 a for a in appointments if a.get("therapistUid") in aliases
             ]
-            appointments = db.enrich_appointments_with_patient_refs(
-                therapist_uid, appointments
-            )
+            patients = None
         else:
-            appointments = db.get_appointments_for_therapist(therapist_uid, start_dt)
+            appointments, patients = await asyncio.gather(
+                asyncio.to_thread(
+                    db.get_appointments_for_therapist, therapist_uid, start_dt
+                ),
+                asyncio.to_thread(db.get_patients_for_therapist, therapist_uid),
+            )
 
         appointments = db.enrich_appointments_with_patient_refs(
-            therapist_uid, appointments
+            therapist_uid, appointments, patients
         )
 
         return {
