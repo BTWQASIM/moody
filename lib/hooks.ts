@@ -13,7 +13,6 @@ import {
   moodAPI,
   notesAPI,
   alertsAPI,
-  messagesAPI,
   notificationsAPI,
   serviceAPI,
   uploadsAPI,
@@ -24,6 +23,17 @@ import { auth } from "./firebase";
 
 const QUERY_STALE_TIME_MS = 30_000;
 const MAX_QUERY_CACHE_ENTRIES = 50;
+const BACKGROUND_REFRESH_INTERVAL_MS = 7_000;
+const BACKGROUND_REFRESH_QUERY_KEYS = new Set([
+  "patients",
+  "patient",
+  "appointments",
+  "risk-alerts",
+  "notifications",
+  "mood-entries",
+  "clinical-notes",
+  "patient-mobile-activity",
+]);
 
 interface QueryCacheEntry {
   data: unknown;
@@ -33,7 +43,13 @@ interface QueryCacheEntry {
 const queryCache = new Map<string, QueryCacheEntry>();
 const inFlightQueries = new Map<string, Promise<unknown>>();
 const queryGenerations = new Map<string, number>();
+const querySubscribers = new Map<string, Set<() => void>>();
+const queryPollers = new Map<
+  string,
+  { queryFn: () => Promise<unknown>; timer: ReturnType<typeof setTimeout> | null }
+>();
 let activeAuthUid: string | null | undefined;
+let visibilityListenerInstalled = false;
 
 onAuthStateChanged(auth, (user) => {
   const nextAuthUid = user?.uid ?? null;
@@ -41,6 +57,10 @@ onAuthStateChanged(auth, (user) => {
     queryCache.clear();
     inFlightQueries.clear();
     queryGenerations.clear();
+    queryPollers.forEach((poller) => {
+      if (poller.timer) clearTimeout(poller.timer);
+    });
+    queryPollers.clear();
   }
   activeAuthUid = nextAuthUid;
 });
@@ -71,6 +91,150 @@ function storeQueryResult(key: string, data: unknown) {
   }
 }
 
+export function invalidateQueryCache(
+  queryKey: string,
+  dependencies?: unknown[]
+) 
+{
+  if (dependencies) {
+    const cacheKey = buildQueryCacheKey(queryKey, dependencies)
+    queryCache.delete(cacheKey)
+
+    // Immediately refresh the mounted query if it has a background poller.
+    const poller = queryPollers.get(cacheKey)
+    if (poller) {
+      void runSharedQuery(cacheKey, poller.queryFn, true)
+    }
+
+    return
+  }
+
+  // No dependencies means invalidate every cached query for this query type.
+  for (const cacheKey of Array.from(queryCache.keys())) {
+    if (!cacheKey.includes(`:${queryKey}:`)) {
+      continue
+    }
+
+    queryCache.delete(cacheKey)
+
+    // Immediately refresh any mounted instance of this query.
+    const poller = queryPollers.get(cacheKey)
+    if (poller) {
+      void runSharedQuery(cacheKey, poller.queryFn, true)
+    }
+  }
+
+
+
+
+  // Immediately refresh mounted queries instead of waiting
+  // for the next background polling interval.
+  for (const key of keysToRefresh) {
+    const poller = queryPollers.get(key);
+
+    if (poller) {
+      void runSharedQuery(key, poller.queryFn, true)
+        .then(() => notifyQuerySubscribers(key))
+        .catch(() => {
+          // Keep the currently displayed data if the refresh fails.
+        });
+    }
+  }
+}
+
+function notifyQuerySubscribers(key: string) {
+  querySubscribers.get(key)?.forEach((notify) => notify());
+}
+
+function scheduleQueryPoll(key: string) {
+  const poller = queryPollers.get(key);
+  if (
+    !poller ||
+    (typeof document !== "undefined" &&
+      document.visibilityState === "hidden")
+  ) {
+    return;
+  }
+
+  poller.timer = setTimeout(async () => {
+    const current = queryPollers.get(key);
+    if (!current) return;
+
+    try {
+      await runSharedQuery(key, current.queryFn, true);
+      notifyQuerySubscribers(key);
+    } catch {
+      // Keep the last successful result visible until the next refresh.
+    } finally {
+      scheduleQueryPoll(key);
+    }
+  }, BACKGROUND_REFRESH_INTERVAL_MS);
+}
+
+function startQueryPoll(
+  cacheKey: string,
+  queryKey: string,
+  queryFn: () => Promise<unknown>
+) {
+  if (!BACKGROUND_REFRESH_QUERY_KEYS.has(queryKey) || queryPollers.has(cacheKey)) return;
+  queryPollers.set(cacheKey, { queryFn, timer: null });
+  scheduleQueryPoll(cacheKey);
+}
+
+function stopQueryPoll(key: string) {
+  const poller = queryPollers.get(key);
+  if (!poller) return;
+  if (poller.timer) clearTimeout(poller.timer);
+  queryPollers.delete(key);
+}
+
+function subscribeToQuery(
+  cacheKey: string,
+  queryKey: string,
+  queryFn: () => Promise<unknown>,
+  notify: () => void
+) {
+  let subscribers = querySubscribers.get(cacheKey);
+  if (!subscribers) {
+    subscribers = new Set();
+    querySubscribers.set(cacheKey, subscribers);
+  }
+  subscribers.add(notify);
+  startQueryPoll(cacheKey, queryKey, queryFn);
+
+  if (!visibilityListenerInstalled && typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    visibilityListenerInstalled = true;
+  }
+
+  return () => {
+    subscribers?.delete(notify);
+    if (subscribers?.size === 0) {
+      querySubscribers.delete(cacheKey);
+      stopQueryPoll(cacheKey);
+    }
+    if (querySubscribers.size === 0 && visibilityListenerInstalled) {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      visibilityListenerInstalled = false;
+    }
+  };
+}
+
+function handleVisibilityChange() {
+  if (typeof document === "undefined" || document.visibilityState === "hidden") return;
+
+  queryPollers.forEach((poller, key) => {
+    if (poller.timer) clearTimeout(poller.timer);
+    poller.timer = null;
+    void runSharedQuery(key, poller.queryFn, true)
+      .then(() => notifyQuerySubscribers(key))
+      .catch(() => {
+        // Keep the last successful result visible until the next refresh.
+      })
+      .finally(() => scheduleQueryPoll(key));
+  });
+}
+
 function runSharedQuery<T>(
   key: string,
   queryFn: () => Promise<T>,
@@ -86,9 +250,10 @@ function runSharedQuery<T>(
       queryCache.delete(key);
     }
 
-    const inFlight = inFlightQueries.get(key);
-    if (inFlight) return inFlight as Promise<T>;
   }
+
+  const inFlight = inFlightQueries.get(key);
+  if (inFlight) return inFlight as Promise<T>;
 
   const generation = (queryGenerations.get(key) ?? 0) + 1;
   queryGenerations.set(key, generation);
@@ -138,12 +303,38 @@ function useQuery<T>(
 
   useEffect(() => {
     let mounted = true;
-    let pollTimeout: NodeJS.Timeout;
+    let pollTimeout: ReturnType<typeof setTimeout> | null = null;
+    let shouldPoll = false;
+    const cacheKey = getQueryCacheKey(queryKey, dependencies);
+    const notify = () => {
+      if (!mounted || !cacheKey) return;
+      const cached = queryCache.get(cacheKey);
+      if (!cached) return;
+      const normalizedResult =
+        cached.data && typeof (cached.data as any).status === "string"
+          ? { ...(cached.data as any), status: normalizeTaskStatus((cached.data as any).status) }
+          : cached.data;
+      setState({
+        data: normalizedResult as T,
+        loading: false,
+        error: null,
+      });
+    };
+
+    if (cacheKey) {
+      const cached = queryCache.get(cacheKey);
+      if (cached) {
+        notify();
+      }
+    }
 
     const fetch = async () => {
       try {
-        setState((prev) => ({ ...prev, loading: true, error: null }));
-        const cacheKey = getQueryCacheKey(queryKey, dependencies);
+        setState((prev) => ({
+          ...prev,
+          loading: prev.data === null,
+          error: null,
+        }));
         const forceRefresh = reloadToken !== previousReloadToken.current;
         previousReloadToken.current = reloadToken;
         const result =
@@ -160,31 +351,65 @@ function useQuery<T>(
             loading: false,
             error: null,
           });
+          if (cacheKey) notifyQuerySubscribers(cacheKey);
 
-          // Set up polling if requested and data indicates task is still running
           if (
             pollInterval &&
             normalizedResult.status &&
             ["pending", "processing"].includes(normalizedResult.status)
           ) {
-            pollTimeout = setTimeout(fetch, pollInterval);
+            shouldPoll = true;
+            if (
+              typeof document === "undefined" ||
+              document.visibilityState !== "hidden"
+            ) {
+              pollTimeout = setTimeout(fetch, pollInterval);
+            }
+          } else {
+            shouldPoll = false;
           }
         }
       } catch (err) {
         if (mounted) {
-          setState({
-            data: null,
+          setState((prev) => ({
+            ...prev,
             loading: false,
             error: err instanceof Error ? err : new Error(String(err)),
-          });
+          }));
         }
       }
     };
 
+    const handleTaskVisibilityChange = () => {
+      if (
+        pollInterval &&
+        shouldPoll &&
+        document.visibilityState === "visible" &&
+        mounted
+      ) {
+        if (pollTimeout) clearTimeout(pollTimeout);
+        pollTimeout = null;
+        void fetch();
+      }
+    };
+
+    const unsubscribe = cacheKey
+      ? subscribeToQuery(cacheKey, queryKey, queryFn, notify)
+      : undefined;
+    if (pollInterval && typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", handleTaskVisibilityChange);
+    }
     fetch();
     return () => {
       mounted = false;
       if (pollTimeout) clearTimeout(pollTimeout);
+      if (pollInterval && typeof document !== "undefined") {
+        document.removeEventListener(
+          "visibilitychange",
+          handleTaskVisibilityChange
+        );
+      }
+      unsubscribe?.();
     };
   }, [...dependencies, reloadToken]);
 
@@ -320,31 +545,6 @@ export function useRiskAlerts() {
 }
 
 /**
- * Hook for listing message threads
- */
-export function useMessageThreads() {
-  return useQuery("message-threads", () =>
-    messagesAPI.listThreads().then((res) => res.threads || [])
-  );
-}
-
-/**
- * Hook for getting messages in a thread
- */
-export function useThreadMessages(threadId: string | null) {
-  return useQuery(
-    "thread-messages",
-    () =>
-      threadId
-        ? messagesAPI
-            .getThreadMessages(threadId)
-            .then((res) => res.messages || [])
-        : Promise.resolve([]),
-    [threadId]
-  );
-}
-
-/**
  * Hook for notifications
  */
 export function useNotifications() {
@@ -429,22 +629,47 @@ export function useUpdatePatient() {
 }
 
 /**
- * Hook for linking a patient's mobile Firebase UID
+ * Deactivate a patient without deleting their historical records.
  */
-export function useLinkPatientFirebaseUid() {
-  return useMutation(
-    ({ patientId, firebaseUid }: { patientId: string; firebaseUid: string }) =>
-      patientAPI.linkFirebaseUid(patientId, firebaseUid).then((res) => res)
+export function useDeletePatient() {
+  return useMutation((patientId: string) =>
+    patientAPI.delete(patientId).then((res) => res)
   );
 }
 
 /**
- * Hook for removing a patient's mobile Firebase UID link
+ * Hook for linking a patient's mobile Firebase UID
  */
+export function useLinkPatientFirebaseUid() {
+  return useMutation(
+    async ({
+      patientId,
+      firebaseUid,
+    }: {
+      patientId: string
+      firebaseUid: string
+    }) => {
+      const result = await patientAPI.linkFirebaseUid(patientId, firebaseUid)
+
+      // Refresh the patient profile and its mobile activity immediately.
+      invalidateQueryCache("patient", [patientId])
+      invalidateQueryCache("patient-mobile-activity", [patientId, 30, 0])
+
+      return result
+    }
+  )
+}
+
 export function useUnlinkPatientFirebaseUid() {
-  return useMutation((patientId: string) =>
-    patientAPI.unlinkFirebaseUid(patientId).then((res) => res)
-  );
+  return useMutation(async (patientId: string) => {
+    const result = await patientAPI.unlinkFirebaseUid(patientId)
+
+    // Refresh the patient profile and its mobile activity immediately.
+    invalidateQueryCache("patient", [patientId])
+    invalidateQueryCache("patient-mobile-activity", [patientId, 30, 0])
+
+    return result
+  })
 }
 
 /**
@@ -507,24 +732,6 @@ export function useCreateClinicalNote() {
 export function useCreateRiskAlert() {
   return useMutation((data) =>
     alertsAPI.create(data).then((res) => res)
-  );
-}
-
-/**
- * Hook for creating a message thread
- */
-export function useCreateThread() {
-  return useMutation((data) =>
-    messagesAPI.createThread(data).then((res) => res)
-  );
-}
-
-/**
- * Hook for sending a message
- */
-export function useSendMessage() {
-  return useMutation((data) =>
-    messagesAPI.sendMessage(data).then((res) => res)
   );
 }
 

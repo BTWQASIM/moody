@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { useParams } from "next/navigation"
+import { useParams, useRouter } from "next/navigation"
 import { useState } from "react"
 import { PortalShell } from "@/components/portal-shell"
 import { ProtectedRoute } from "@/app/protected-route"
@@ -23,6 +23,8 @@ import {
   usePatientMobileActivity,
   useLinkPatientFirebaseUid,
   useUnlinkPatientFirebaseUid,
+  useDeletePatient,
+  invalidateQueryCache,
 } from "@/lib/hooks"
 import {
   ArrowLeft,
@@ -47,37 +49,134 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 
+function getPatientStatusLabel(status?: string) {
+  switch (status?.toLowerCase()) {
+    case "pending":
+      return "Pending"
+    case "confirmed":
+      return "Confirmed"
+    case "completed":
+      return "Completed"
+    case "cancelled":
+      return "Cancelled"
+    case "rescheduled":
+      return "Rescheduled"
+    case "no_show":
+      return "No Show"
+    default:
+      return "Pending"
+  }
+}
+
 function PatientDetailContent() {
   const params = useParams()
+  const router = useRouter()
   const patientId = params.id as string
 
-  const { data: patient, loading: patientLoading, error: patientError } = usePatient(patientId)
-  const { data: appointments, loading: appointmentsLoading } = useAppointments()
-  const { data: moodEntries, loading: moodLoading } = useMoodEntries(patientId)
-  const { data: clinicalNotes, loading: notesLoading } = useClinicalNotes(patientId)
-  const { execute: createMoodEntry, loading: creatingMood } = useCreateMoodEntry()
-  const { execute: createNote, loading: creatingNote } = useCreateClinicalNote()
+  const {
+    data: patient,
+    loading: patientLoading,
+    error: patientError,
+  } = usePatient(patientId)
+
+  const {
+    data: appointments,
+    loading: appointmentsLoading,
+  } = useAppointments()
+
+  const {
+    data: moodEntries,
+    loading: moodLoading,
+    refetch: refetchMoodEntries,
+  } = useMoodEntries(patientId)
+
+  const {
+    data: clinicalNotes,
+    loading: notesLoading,
+    refetch: refetchClinicalNotes,
+  } = useClinicalNotes(patientId)
+
+  const {
+    execute: createMoodEntry,
+    loading: creatingMood,
+  } = useCreateMoodEntry()
+
+  const {
+    execute: createNote,
+    loading: creatingNote,
+  } = useCreateClinicalNote()
+
   const [mobileActivityRefreshKey, setMobileActivityRefreshKey] = useState(0)
+
   const {
     data: mobileActivity,
     loading: mobileActivityLoading,
     error: mobileActivityError,
-  } = usePatientMobileActivity(patientId, 30, mobileActivityRefreshKey)
-  const { execute: linkFirebaseUid, loading: linking } = useLinkPatientFirebaseUid()
-  const { execute: unlinkFirebaseUid, loading: unlinking } =
-    useUnlinkPatientFirebaseUid()
+  } = usePatientMobileActivity(
+    patientId,
+    30,
+    mobileActivityRefreshKey,
+  )
 
-  const [moodForm, setMoodForm] = useState({ moodScore: 5, description: "" })
-  const [noteForm, setNoteForm] = useState({ content: "", tags: "", isConfidential: false })
+  const {
+    execute: linkFirebaseUid,
+    loading: linking,
+  } = useLinkPatientFirebaseUid()
+
+  const {
+    execute: unlinkFirebaseUid,
+    loading: unlinking,
+  } = useUnlinkPatientFirebaseUid()
+
+  const {
+    execute: deletePatient,
+    loading: deleting,
+  } = useDeletePatient()
+
+  const [moodForm, setMoodForm] = useState({
+    moodScore: 5,
+    description: "",
+  })
+
+  const [noteForm, setNoteForm] = useState({
+    content: "",
+    tags: "",
+    isConfidential: false,
+  })
+
   const [isMoodOpen, setIsMoodOpen] = useState(false)
   const [isNoteOpen, setIsNoteOpen] = useState(false)
   const [isLinkOpen, setIsLinkOpen] = useState(false)
   const [firebaseUidInput, setFirebaseUidInput] = useState("")
   const [linkError, setLinkError] = useState<string | null>(null)
 
+  const handleRemovePatient = async () => {
+    if (
+      !window.confirm(
+        "Remove this patient from your patient list? Their historical records will be preserved.",
+      )
+    ) {
+      return
+    }
+
+    try {
+      await deletePatient(patientId)
+
+      invalidateQueryCache("patients")
+      invalidateQueryCache("patient", [patientId])
+
+      router.push("/patients")
+    } catch (err) {
+      console.error("Failed to remove patient:", err)
+    }
+  }
+
   if (patientError) {
     return (
-      <PortalShell title="Patient not found" subtitle="Unable to load this patient">
+      <PortalShell
+        title="Patient not found"
+        subtitle="Unable to load this patient"
+      >
         <Link
           href="/patients"
           className="mb-4 inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
@@ -85,6 +184,7 @@ function PatientDetailContent() {
           <ArrowLeft className="size-4" />
           Back to directory
         </Link>
+
         <div className="flex items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">
           <AlertTriangle className="h-4 w-4" />
           <span>{patientError.message}</span>
@@ -93,13 +193,66 @@ function PatientDetailContent() {
     )
   }
 
+  /*
+   * Resolve this patient's appointments.
+   *
+   * Different appointment records may identify the patient using:
+   * - portal patient ID
+   * - portalPatientId
+   * - Firebase/mobile UID
+   *
+   * We support all three so the profile does not incorrectly show
+   * "Pending" when the appointment is actually confirmed/completed.
+   */
   const patientAppointments = (appointments || []).filter(
-    (apt: any) => apt.patientId === patientId
+    (apt: any) =>
+      apt.patientId === patientId ||
+      apt.portalPatientId === patientId ||
+      apt.patientId === patient?.firebaseUid,
   )
+
+  /*
+   * The profile status is based on the latest appointment,
+   * not patient.status.
+   *
+   * This means:
+   * pending     -> Pending
+   * confirmed   -> Confirmed
+   * completed   -> Completed
+   * cancelled   -> Cancelled
+   * rescheduled -> Rescheduled
+   * no_show     -> No Show
+   */
+  const latestAppointment = [...patientAppointments].sort(
+    (a: any, b: any) => {
+      const dateA = new Date(
+        a.scheduledAt ||
+          a.startTime ||
+          a.date ||
+          a.createdAt ||
+          0,
+      ).getTime()
+
+      const dateB = new Date(
+        b.scheduledAt ||
+          b.startTime ||
+          b.date ||
+          b.createdAt ||
+          0,
+      ).getTime()
+
+      return dateB - dateA
+    },
+  )[0]
+
+  const bookingStatus = latestAppointment?.status || "pending"
 
   const handleCreateMoodEntry = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!moodForm.description.trim()) return
+
+    if (!moodForm.description.trim()) {
+      return
+    }
 
     await createMoodEntry({
       patientId,
@@ -107,13 +260,22 @@ function PatientDetailContent() {
       description: moodForm.description,
     })
 
-    setMoodForm({ moodScore: 5, description: "" })
+    await refetchMoodEntries()
+
+    setMoodForm({
+      moodScore: 5,
+      description: "",
+    })
+
     setIsMoodOpen(false)
   }
 
   const handleCreateNote = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!noteForm.content.trim()) return
+
+    if (!noteForm.content.trim()) {
+      return
+    }
 
     await createNote({
       patientId,
@@ -125,20 +287,34 @@ function PatientDetailContent() {
       isConfidential: noteForm.isConfidential,
     })
 
-    setNoteForm({ content: "", tags: "", isConfidential: false })
+    await refetchClinicalNotes()
+
+    setNoteForm({
+      content: "",
+      tags: "",
+      isConfidential: false,
+    })
+
     setIsNoteOpen(false)
   }
 
   const handleLinkFirebaseUid = async (e: React.FormEvent) => {
     e.preventDefault()
     setLinkError(null)
+
     const uid = firebaseUidInput.trim()
+
     if (!uid) {
       setLinkError("Please enter the patient's Firebase UID.")
       return
     }
+
     try {
-      await linkFirebaseUid({ patientId, firebaseUid: uid })
+      await linkFirebaseUid({
+        patientId,
+        firebaseUid: uid,
+      })
+
       setFirebaseUidInput("")
       setIsLinkOpen(false)
       setMobileActivityRefreshKey((key) => key + 1)
@@ -149,6 +325,7 @@ function PatientDetailContent() {
 
   const handleUnlinkFirebaseUid = async () => {
     setLinkError(null)
+
     try {
       await unlinkFirebaseUid(patientId)
       setMobileActivityRefreshKey((key) => key + 1)
@@ -168,19 +345,32 @@ function PatientDetailContent() {
   return (
     <PortalShell
       title={
-        patientLoading ? "Loading..." : `${patient?.firstName} ${patient?.lastName}`
+        patientLoading
+          ? "Loading..."
+          : `${patient?.firstName || ""} ${
+              patient?.lastName || ""
+            }`.trim()
       }
       subtitle={
         patientLoading
           ? "Loading patient information..."
-          : `${patient?.status || "active"} · Member since ${
+          : `${getPatientStatusLabel(
+              bookingStatus,
+            )} · Member since ${
               patient?.createdAt
-                ? new Date(patient.createdAt).toLocaleDateString()
+                ? new Date(
+                    patient.createdAt,
+                  ).toLocaleDateString()
                 : "N/A"
             }`
       }
     >
-      <Button variant="ghost" size="sm" className="mb-4 -ml-2 text-muted-foreground" onClick={() => window.history.back()}>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="mb-4 -ml-2 text-muted-foreground"
+        onClick={() => window.history.back()}
+      >
         <ArrowLeft className="size-4" />
         Back to directory
       </Button>
@@ -203,89 +393,155 @@ function PatientDetailContent() {
               <div className="flex items-start gap-4">
                 <Avatar className="size-16">
                   <AvatarImage
-                    src={patient.profilePhoto || "/placeholder.svg"}
-                    alt={`${patient.firstName} ${patient.lastName}`}
+                    src={
+                      patient.profilePhoto ||
+                      "/placeholder.svg"
+                    }
+                    alt={`${patient.firstName || ""} ${
+                      patient.lastName || ""
+                    }`.trim()}
                   />
-                  <AvatarFallback>{patient.firstName?.charAt(0)}</AvatarFallback>
+
+                  <AvatarFallback>
+                    {patient.firstName?.charAt(0)}
+                  </AvatarFallback>
                 </Avatar>
+
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
                     <h2 className="text-xl font-semibold text-foreground">
-                      {`${patient.firstName} ${patient.lastName}`}
+                      {`${patient.firstName || ""} ${
+                        patient.lastName || ""
+                      }`.trim()}
                     </h2>
-                    <RiskBadge level={patient.riskLevel || "low"} />
+
+                    <RiskBadge
+                      level={patient.riskLevel || "low"}
+                    />
                   </div>
+
                   <div className="mt-3 space-y-1 text-sm text-muted-foreground">
                     <div className="flex items-center gap-2">
                       <Mail className="h-4 w-4" />
                       {patient.email}
                     </div>
+
                     {patient.phoneNumber && (
                       <div className="flex items-center gap-2">
                         <Phone className="h-4 w-4" />
                         {patient.phoneNumber}
                       </div>
                     )}
+
                     {patient.dateOfBirth && (
                       <div className="flex items-center gap-2">
                         <Calendar className="h-4 w-4" />
-                        DOB: {new Date(patient.dateOfBirth).toLocaleDateString()}
+                        DOB:{" "}
+                        {new Date(
+                          patient.dateOfBirth,
+                        ).toLocaleDateString()}
                       </div>
                     )}
                   </div>
                 </div>
               </div>
+
               <div className="flex gap-2">
-                <Link href="/messages">
-                  <Button variant="outline">Message</Button>
-                </Link>
                 <Link href="/appointments">
                   <Button>Schedule</Button>
                 </Link>
+
+                <Button
+                  variant="outline"
+                  onClick={handleRemovePatient}
+                  disabled={deleting}
+                >
+                  {deleting
+                    ? "Removing..."
+                    : "Remove patient"}
+                </Button>
               </div>
             </div>
           </Card>
 
           <Tabs defaultValue="overview" className="mt-4">
             <TabsList className="flex h-auto w-full flex-wrap justify-start">
-              <TabsTrigger value="overview">Overview</TabsTrigger>
-              <TabsTrigger value="appointments">Appointments</TabsTrigger>
-              <TabsTrigger value="mood">Mood Entries</TabsTrigger>
-              <TabsTrigger value="notes">Clinical Notes</TabsTrigger>
-              <TabsTrigger value="mobile" className="flex items-center gap-1">
+              <TabsTrigger value="overview">
+                Overview
+              </TabsTrigger>
+
+              <TabsTrigger value="appointments">
+                Appointments
+              </TabsTrigger>
+
+              <TabsTrigger value="mood">
+                Mood Entries
+              </TabsTrigger>
+
+              <TabsTrigger value="notes">
+                Clinical Notes
+              </TabsTrigger>
+
+              <TabsTrigger
+                value="mobile"
+                className="flex items-center gap-1"
+              >
                 <Smartphone className="h-3.5 w-3.5" />
                 Mobile Activity
               </TabsTrigger>
             </TabsList>
 
             {/* Overview */}
-            <TabsContent value="overview" className="mt-4 space-y-4">
+            <TabsContent
+              value="overview"
+              className="mt-4 space-y-4"
+            >
               <div className="grid gap-4 lg:grid-cols-3">
                 <Card>
                   <CardHeader>
-                    <CardTitle className="text-sm">Status</CardTitle>
+                    <CardTitle className="text-sm">
+                      Status
+                    </CardTitle>
                   </CardHeader>
+
                   <CardContent>
-                    <p className="text-2xl font-semibold capitalize">{patient.status}</p>
+                    <p className="text-2xl font-semibold">
+                      {getPatientStatusLabel(
+                        bookingStatus,
+                      )}
+                    </p>
                   </CardContent>
                 </Card>
+
                 <Card>
                   <CardHeader>
-                    <CardTitle className="text-sm">Risk Level</CardTitle>
+                    <CardTitle className="text-sm">
+                      Risk Level
+                    </CardTitle>
                   </CardHeader>
+
                   <CardContent>
                     <p className="text-2xl font-semibold capitalize">
                       {patient.riskLevel || "low"}
                     </p>
                   </CardContent>
                 </Card>
+
                 <Card>
                   <CardHeader>
-                    <CardTitle className="text-sm">Total Sessions</CardTitle>
+                    <CardTitle className="text-sm">
+                      Total Sessions
+                    </CardTitle>
                   </CardHeader>
+
                   <CardContent>
                     <p className="text-2xl font-semibold">
-                      {patientAppointments.filter((a: any) => a.status === "completed").length}
+                      {
+                        patientAppointments.filter(
+                          (a: any) =>
+                            a.status === "completed",
+                        ).length
+                      }
                     </p>
                   </CardContent>
                 </Card>
@@ -295,6 +551,7 @@ function PatientDetailContent() {
                 <CardHeader>
                   <CardTitle>Notes</CardTitle>
                 </CardHeader>
+
                 <CardContent>
                   <p className="text-muted-foreground">
                     {patient.notes ||
@@ -305,10 +562,14 @@ function PatientDetailContent() {
             </TabsContent>
 
             {/* Appointments */}
-            <TabsContent value="appointments" className="mt-4 space-y-4">
+            <TabsContent
+              value="appointments"
+              className="mt-4 space-y-4"
+            >
               <Card>
                 <CardHeader className="flex-row items-center justify-between space-y-0">
                   <CardTitle>Appointments</CardTitle>
+
                   <Link href="/appointments">
                     <Button size="sm">
                       <Plus className="h-4 w-4 mr-1" />
@@ -316,42 +577,66 @@ function PatientDetailContent() {
                     </Button>
                   </Link>
                 </CardHeader>
+
                 <CardContent>
                   {appointmentsLoading ? (
                     <div className="space-y-2">
-                      {Array.from({ length: 3 }).map((_, i) => (
-                        <Skeleton key={i} className="h-12 w-full" />
-                      ))}
+                      {Array.from({ length: 3 }).map(
+                        (_, i) => (
+                          <Skeleton
+                            key={i}
+                            className="h-12 w-full"
+                          />
+                        ),
+                      )}
                     </div>
-                  ) : patientAppointments.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">No appointments yet</p>
+                  ) : patientAppointments.length ===
+                    0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      No appointments yet
+                    </p>
                   ) : (
                     <div className="space-y-2">
-                      {patientAppointments.slice(0, 10).map((apt: any) => (
-                        <div
-                          key={apt.id}
-                          className="flex items-center justify-between rounded-lg border p-3"
-                        >
-                          <div>
-                            <p className="font-medium text-sm">
-                              {new Date(apt.scheduledAt).toLocaleDateString()}{" "}
-                              at{" "}
-                              {new Date(apt.scheduledAt).toLocaleTimeString(
-                                "en-US",
-                                { hour: "2-digit", minute: "2-digit" }
-                              )}
-                            </p>
-                            <p className="text-xs text-muted-foreground">
-                              {apt.type || "Therapy Session"} · {apt.duration || 60}min
-                            </p>
+                      {patientAppointments
+                        .slice(0, 10)
+                        .map((apt: any) => (
+                          <div
+                            key={apt.id}
+                            className="flex items-center justify-between rounded-lg border p-3"
+                          >
+                            <div>
+                              <p className="font-medium text-sm">
+                                {new Date(
+                                  apt.scheduledAt,
+                                ).toLocaleDateString()}{" "}
+                                at{" "}
+                                {new Date(
+                                  apt.scheduledAt,
+                                ).toLocaleTimeString(
+                                  "en-US",
+                                  {
+                                    hour: "2-digit",
+                                    minute: "2-digit",
+                                  },
+                                )}
+                              </p>
+
+                              <p className="text-xs text-muted-foreground">
+                                {apt.type ||
+                                  "Therapy Session"}{" "}
+                                ·{" "}
+                                {apt.duration || 60}
+                                min
+                              </p>
+                            </div>
+
+                            <div>
+                              <span className="text-xs font-medium rounded px-2 py-1 bg-blue-100 text-blue-700">
+                                {apt.status}
+                              </span>
+                            </div>
                           </div>
-                          <div>
-                            <span className="text-xs font-medium rounded px-2 py-1 bg-blue-100 text-blue-700">
-                              {apt.status}
-                            </span>
-                          </div>
-                        </div>
-                      ))}
+                        ))}
                     </div>
                   )}
                 </CardContent>
@@ -359,11 +644,18 @@ function PatientDetailContent() {
             </TabsContent>
 
             {/* Mood Entries */}
-            <TabsContent value="mood" className="mt-4 space-y-4">
+            <TabsContent
+              value="mood"
+              className="mt-4 space-y-4"
+            >
               <Card>
                 <CardHeader className="flex-row items-center justify-between space-y-0">
                   <CardTitle>Mood Entries</CardTitle>
-                  <Dialog open={isMoodOpen} onOpenChange={setIsMoodOpen}>
+
+                  <Dialog
+                    open={isMoodOpen}
+                    onOpenChange={setIsMoodOpen}
+                  >
                     <DialogTrigger
                       render={
                         <Button size="sm">
@@ -372,18 +664,29 @@ function PatientDetailContent() {
                         </Button>
                       }
                     />
+
                     <DialogContent>
                       <DialogHeader>
-                        <DialogTitle>Log Mood Entry</DialogTitle>
+                        <DialogTitle>
+                          Log Mood Entry
+                        </DialogTitle>
+
                         <DialogDescription>
-                          Record the patient's current mood and observations
+                          Record the patient's current mood
+                          and observations
                         </DialogDescription>
                       </DialogHeader>
-                      <form onSubmit={handleCreateMoodEntry} className="space-y-4">
+
+                      <form
+                        onSubmit={handleCreateMoodEntry}
+                        className="space-y-4"
+                      >
                         <div className="space-y-2">
                           <Label htmlFor="mood-score">
-                            Mood Score (1-10): {moodForm.moodScore}
+                            Mood Score (1-10):{" "}
+                            {moodForm.moodScore}
                           </Label>
+
                           <Input
                             id="mood-score"
                             type="range"
@@ -393,26 +696,36 @@ function PatientDetailContent() {
                             onChange={(e) =>
                               setMoodForm({
                                 ...moodForm,
-                                moodScore: parseInt(e.target.value),
+                                moodScore: parseInt(
+                                  e.target.value,
+                                ),
                               })
                             }
                           />
                         </div>
+
                         <div className="space-y-2">
-                          <Label htmlFor="description">Notes</Label>
+                          <Label htmlFor="description">
+                            Notes
+                          </Label>
+
                           <Textarea
                             id="description"
                             placeholder="Observations about mood, triggers, or context..."
-                            value={moodForm.description}
+                            value={
+                              moodForm.description
+                            }
                             onChange={(e) =>
                               setMoodForm({
                                 ...moodForm,
-                                description: e.target.value,
+                                description:
+                                  e.target.value,
                               })
                             }
                             required
                           />
                         </div>
+
                         <Button
                           type="submit"
                           disabled={
@@ -434,46 +747,65 @@ function PatientDetailContent() {
                     </DialogContent>
                   </Dialog>
                 </CardHeader>
+
                 <CardContent>
                   {moodLoading ? (
                     <div className="space-y-2">
-                      {Array.from({ length: 3 }).map((_, i) => (
-                        <Skeleton key={i} className="h-16 w-full" />
-                      ))}
+                      {Array.from({ length: 3 }).map(
+                        (_, i) => (
+                          <Skeleton
+                            key={i}
+                            className="h-16 w-full"
+                          />
+                        ),
+                      )}
                     </div>
-                  ) : !moodEntries || moodEntries.length === 0 ? (
+                  ) : !moodEntries ||
+                    moodEntries.length === 0 ? (
                     <p className="text-sm text-muted-foreground">
                       No mood entries yet
                     </p>
                   ) : (
                     <div className="space-y-3">
-                      {moodEntries.slice(0, 10).map((entry: any) => (
-                        <div
-                          key={entry.id}
-                          className="rounded-lg border p-3"
-                        >
-                          <div className="flex items-start justify-between">
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <p className="font-medium text-sm">
-                                  Mood Score: {entry.moodScore}/10
+                      {moodEntries
+                        .slice(0, 10)
+                        .map((entry: any) => (
+                          <div
+                            key={entry.id}
+                            className="rounded-lg border p-3"
+                          >
+                            <div className="flex items-start justify-between">
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <p className="font-medium text-sm">
+                                    Mood Score:{" "}
+                                    {entry.moodScore}/10
+                                  </p>
+
+                                  {entry.riskLevel && (
+                                    <RiskBadge
+                                      level={
+                                        entry.riskLevel
+                                      }
+                                    />
+                                  )}
+                                </div>
+
+                                <p className="text-xs text-muted-foreground mt-1">
+                                  {new Date(
+                                    entry.createdAt,
+                                  ).toLocaleDateString()}
                                 </p>
-                                {entry.riskLevel && (
-                                  <RiskBadge level={entry.riskLevel} />
-                                )}
                               </div>
-                              <p className="text-xs text-muted-foreground mt-1">
-                                {new Date(entry.createdAt).toLocaleDateString()}
-                              </p>
                             </div>
+
+                            {entry.description && (
+                              <p className="text-sm text-muted-foreground mt-2">
+                                {entry.description}
+                              </p>
+                            )}
                           </div>
-                          {entry.description && (
-                            <p className="text-sm text-muted-foreground mt-2">
-                              {entry.description}
-                            </p>
-                          )}
-                        </div>
-                      ))}
+                        ))}
                     </div>
                   )}
                 </CardContent>
@@ -481,11 +813,18 @@ function PatientDetailContent() {
             </TabsContent>
 
             {/* Clinical Notes */}
-            <TabsContent value="notes" className="mt-4 space-y-4">
+            <TabsContent
+              value="notes"
+              className="mt-4 space-y-4"
+            >
               <Card>
                 <CardHeader className="flex-row items-center justify-between space-y-0">
                   <CardTitle>Clinical Notes</CardTitle>
-                  <Dialog open={isNoteOpen} onOpenChange={setIsNoteOpen}>
+
+                  <Dialog
+                    open={isNoteOpen}
+                    onOpenChange={setIsNoteOpen}
+                  >
                     <DialogTrigger
                       render={
                         <Button size="sm">
@@ -494,16 +833,28 @@ function PatientDetailContent() {
                         </Button>
                       }
                     />
+
                     <DialogContent>
                       <DialogHeader>
-                        <DialogTitle>Create Clinical Note</DialogTitle>
+                        <DialogTitle>
+                          Create Clinical Note
+                        </DialogTitle>
+
                         <DialogDescription>
-                          Document clinical observations and treatment notes
+                          Document clinical observations and
+                          treatment notes
                         </DialogDescription>
                       </DialogHeader>
-                      <form onSubmit={handleCreateNote} className="space-y-4">
+
+                      <form
+                        onSubmit={handleCreateNote}
+                        className="space-y-4"
+                      >
                         <div className="space-y-2">
-                          <Label htmlFor="content">Note Content</Label>
+                          <Label htmlFor="content">
+                            Note Content
+                          </Label>
+
                           <Textarea
                             id="content"
                             placeholder="Clinical observations, session summary, treatment plan updates..."
@@ -518,8 +869,12 @@ function PatientDetailContent() {
                             className="min-h-32"
                           />
                         </div>
+
                         <div className="space-y-2">
-                          <Label htmlFor="tags">Tags (comma-separated)</Label>
+                          <Label htmlFor="tags">
+                            Tags (comma-separated)
+                          </Label>
+
                           <Input
                             id="tags"
                             placeholder="e.g., therapy, follow-up, medication"
@@ -532,18 +887,23 @@ function PatientDetailContent() {
                             }
                           />
                         </div>
+
                         <div className="flex items-center gap-2">
                           <input
                             type="checkbox"
                             id="confidential"
-                            checked={noteForm.isConfidential}
+                            checked={
+                              noteForm.isConfidential
+                            }
                             onChange={(e) =>
                               setNoteForm({
                                 ...noteForm,
-                                isConfidential: e.target.checked,
+                                isConfidential:
+                                  e.target.checked,
                               })
                             }
                           />
+
                           <Label
                             htmlFor="confidential"
                             className="text-sm"
@@ -551,6 +911,7 @@ function PatientDetailContent() {
                             Mark as confidential
                           </Label>
                         </div>
+
                         <Button
                           type="submit"
                           disabled={
@@ -572,60 +933,84 @@ function PatientDetailContent() {
                     </DialogContent>
                   </Dialog>
                 </CardHeader>
+
                 <CardContent>
                   {notesLoading ? (
                     <div className="space-y-2">
-                      {Array.from({ length: 3 }).map((_, i) => (
-                        <Skeleton key={i} className="h-20 w-full" />
-                      ))}
+                      {Array.from({ length: 3 }).map(
+                        (_, i) => (
+                          <Skeleton
+                            key={i}
+                            className="h-20 w-full"
+                          />
+                        ),
+                      )}
                     </div>
-                  ) : !clinicalNotes || clinicalNotes.length === 0 ? (
+                  ) : !clinicalNotes ||
+                    clinicalNotes.length === 0 ? (
                     <p className="text-sm text-muted-foreground">
                       No clinical notes yet
                     </p>
                   ) : (
                     <div className="space-y-3">
-                      {clinicalNotes.slice(0, 10).map((note: any) => (
-                        <div
-                          key={note.id}
-                          className="rounded-lg border p-3"
-                        >
-                          <div className="flex items-start justify-between">
-                            <div className="flex-1">
-                              <p className="text-xs text-muted-foreground">
-                                {new Date(note.createdAt).toLocaleDateString()}
-                              </p>
-                              {note.tags && note.tags.length > 0 && (
-                                <div className="mt-1 flex flex-wrap gap-1">
-                                  {note.tags.map((tag: string, i: number) => (
-                                    <span
-                                      key={i}
-                                      className="text-xs rounded bg-blue-100 px-2 py-1 text-blue-700"
-                                    >
-                                      {tag}
-                                    </span>
-                                  ))}
-                                </div>
+                      {clinicalNotes
+                        .slice(0, 10)
+                        .map((note: any) => (
+                          <div
+                            key={note.id}
+                            className="rounded-lg border p-3"
+                          >
+                            <div className="flex items-start justify-between">
+                              <div className="flex-1">
+                                <p className="text-xs text-muted-foreground">
+                                  {new Date(
+                                    note.createdAt,
+                                  ).toLocaleDateString()}
+                                </p>
+
+                                {note.tags &&
+                                  note.tags.length > 0 && (
+                                    <div className="mt-1 flex flex-wrap gap-1">
+                                      {note.tags.map(
+                                        (
+                                          tag: string,
+                                          i: number,
+                                        ) => (
+                                          <span
+                                            key={i}
+                                            className="text-xs rounded bg-blue-100 px-2 py-1 text-blue-700"
+                                          >
+                                            {tag}
+                                          </span>
+                                        ),
+                                      )}
+                                    </div>
+                                  )}
+                              </div>
+
+                              {note.isConfidential && (
+                                <span className="text-xs font-medium rounded px-2 py-1 bg-red-100 text-red-700 ml-2">
+                                  Confidential
+                                </span>
                               )}
                             </div>
-                            {note.isConfidential && (
-                              <span className="text-xs font-medium rounded px-2 py-1 bg-red-100 text-red-700 ml-2">
-                                Confidential
-                              </span>
-                            )}
+
+                            <p className="text-sm text-foreground mt-2">
+                              {note.content}
+                            </p>
                           </div>
-                          <p className="text-sm text-foreground mt-2">
-                            {note.content}
-                          </p>
-                        </div>
-                      ))}
+                        ))}
                     </div>
                   )}
                 </CardContent>
               </Card>
             </TabsContent>
+
             {/* Mobile Activity */}
-            <TabsContent value="mobile" className="mt-4 space-y-4">
+            <TabsContent
+              value="mobile"
+              className="mt-4 space-y-4"
+            >
               {/* Link / unlink mobile account */}
               <Card>
                 <CardHeader className="flex-row items-center justify-between space-y-0">
@@ -634,51 +1019,82 @@ function PatientDetailContent() {
                       <Smartphone className="h-4 w-4" />
                       Mobile App Account
                     </CardTitle>
+
                     <p className="mt-1 text-xs text-muted-foreground">
-                      Link this patient's moodie mobile account to see their
-                      self-reported mood check-ins and journal entries.
+                      Link this patient's moodie mobile account
+                      to see their self-reported mood check-ins
+                      and journal entries.
                     </p>
                   </div>
+
                   {!mobileActivity?.linked ? (
-                    <Dialog open={isLinkOpen} onOpenChange={setIsLinkOpen}>
+                    <Dialog
+                      open={isLinkOpen}
+                      onOpenChange={setIsLinkOpen}
+                    >
                       <DialogTrigger
                         render={
-                          <Button size="sm" variant="outline">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                          >
                             <Link2 className="h-4 w-4 mr-1" />
                             Link Account
                           </Button>
                         }
                       />
+
                       <DialogContent>
                         <DialogHeader>
-                          <DialogTitle>Link Patient's Mobile Account</DialogTitle>
+                          <DialogTitle>
+                            Link Patient's Mobile Account
+                          </DialogTitle>
+
                           <DialogDescription>
-                            Paste the Firebase UID from the patient's moodie mobile
-                            app account — not the therapist account. Find it in Firebase
-                            Console → Authentication → Users, matching the patient's
-                            login email.
+                            Paste the Firebase UID from the
+                            patient's moodie mobile app account
+                            — not the therapist account. Find it
+                            in Firebase Console →
+                            Authentication → Users, matching
+                            the patient's login email.
                           </DialogDescription>
                         </DialogHeader>
-                        <form onSubmit={handleLinkFirebaseUid} className="space-y-4">
+
+                        <form
+                          onSubmit={handleLinkFirebaseUid}
+                          className="space-y-4"
+                        >
                           <div className="space-y-2">
-                            <Label htmlFor="firebase-uid">Patient Firebase UID</Label>
+                            <Label htmlFor="firebase-uid">
+                              Patient Firebase UID
+                            </Label>
+
                             <Input
                               id="firebase-uid"
                               placeholder="e.g. abc123def456..."
                               value={firebaseUidInput}
-                              onChange={(e) => setFirebaseUidInput(e.target.value)}
+                              onChange={(e) =>
+                                setFirebaseUidInput(
+                                  e.target.value,
+                                )
+                              }
                               required
                             />
                           </div>
+
                           {linkError && (
                             <div className="flex items-center gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
                               <AlertTriangle className="h-4 w-4 flex-shrink-0" />
                               {linkError}
                             </div>
                           )}
+
                           <Button
                             type="submit"
-                            disabled={linking || !firebaseUidInput.trim()}
+                            disabled={
+                              linking ||
+                              !firebaseUidInput.trim()
+                            }
                             className="w-full"
                           >
                             {linking ? (
@@ -699,86 +1115,116 @@ function PatientDetailContent() {
                         <span className="h-2 w-2 rounded-full bg-green-500" />
                         Linked
                       </div>
-                      <Dialog open={isLinkOpen} onOpenChange={setIsLinkOpen}>
+
+                      <Dialog
+                        open={isLinkOpen}
+                        onOpenChange={setIsLinkOpen}
+                      >
                         <DialogTrigger
                           render={
-                            <Button size="sm" variant="outline">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                            >
                               Change UID
                             </Button>
                           }
                         />
+
                         <DialogContent>
                           <DialogHeader>
-                            <DialogTitle>Change Linked Mobile Account</DialogTitle>
+                            <DialogTitle>
+                              Change Linked Mobile Account
+                            </DialogTitle>
+
                             <DialogDescription>
-                              Enter the correct Firebase UID for this patient's mobile
-                              app login.
+                              Enter the correct Firebase UID for
+                              this patient's mobile app login.
                             </DialogDescription>
                           </DialogHeader>
-                          <form onSubmit={handleLinkFirebaseUid} className="space-y-4">
+
+                          <form
+                            onSubmit={handleLinkFirebaseUid}
+                            className="space-y-4"
+                          >
                             <div className="space-y-2">
-                              <Label htmlFor="firebase-uid-change">Patient Firebase UID</Label>
+                              <Label htmlFor="firebase-uid-change">
+                                Patient Firebase UID
+                              </Label>
+
                               <Input
                                 id="firebase-uid-change"
                                 placeholder="Paste the patient's mobile app UID"
                                 value={firebaseUidInput}
-                                onChange={(e) => setFirebaseUidInput(e.target.value)}
+                                onChange={(e) =>
+                                  setFirebaseUidInput(
+                                    e.target.value,
+                                  )
+                                }
                                 required
                               />
                             </div>
+
                             {linkError && (
                               <div className="flex items-center gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
                                 <AlertTriangle className="h-4 w-4 flex-shrink-0" />
                                 {linkError}
                               </div>
                             )}
+
                             <Button
                               type="submit"
-                              disabled={linking || !firebaseUidInput.trim()}
+                              disabled={
+                                linking ||
+                                !firebaseUidInput.trim()
+                              }
                               className="w-full"
                             >
-                              {linking ? "Updating..." : "Update Link"}
+                              {linking
+                                ? "Updating..."
+                                : "Update Link"}
                             </Button>
                           </form>
                         </DialogContent>
                       </Dialog>
+
                       <Button
                         size="sm"
                         variant="ghost"
                         disabled={unlinking}
                         onClick={handleUnlinkFirebaseUid}
                       >
-                        {unlinking ? "Unlinking..." : "Unlink"}
+                        {unlinking
+                          ? "Unlinking..."
+                          : "Unlink"}
                       </Button>
                     </div>
                   )}
                 </CardHeader>
+
                 {mobileActivity?.linked && (
                   <CardContent className="space-y-2">
                     <p className="text-xs text-muted-foreground">
-                      Firebase UID:{" "}
                       <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
                         {mobileActivity.firebaseUid}
                       </code>
                     </p>
+
                     {mobileActivity.mobileUserFound ? (
                       <p className="text-xs text-muted-foreground">
-                        Mobile profile:{" "}
-                        <span className="font-medium text-foreground">
-                          {mobileActivity.mobileUserName || "Unknown"}
-                        </span>
-                        {mobileActivity.mobileUserEmail
-                          ? ` · ${mobileActivity.mobileUserEmail}`
-                          : ""}
+                        Mobile account linked
                       </p>
                     ) : (
                       <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
                         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+
                         <span>
-                          No mobile app profile found for this UID. You may have
-                          linked the wrong account — use <strong>Change UID</strong> and
-                          paste the UID from the patient's mobile login in Firebase
-                          Authentication.
+                          No mobile app profile found for this
+                          UID. You may have linked the wrong
+                          account — use{" "}
+                          <strong>Change UID</strong> and paste
+                          the UID from the patient's mobile login
+                          in Firebase Authentication.
                         </span>
                       </div>
                     )}
@@ -789,89 +1235,120 @@ function PatientDetailContent() {
               {/* Error state */}
               {mobileActivityError && (
                 <div className="flex items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">
-                  <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-                  Failed to load mobile activity. Please try refreshing.
+                  <AlertTriangle className="h-4 w-4" />
+                  Failed to load mobile activity. Please try
+                  refreshing.
                 </div>
               )}
 
               {/* Not linked state */}
-              {!mobileActivityLoading && !mobileActivityError && !mobileActivity?.linked && (
-                <Card>
-                  <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-                    <Smartphone className="h-10 w-10 text-muted-foreground/40 mb-3" />
-                    <p className="font-medium text-sm text-muted-foreground">
-                      No mobile account linked
-                    </p>
-                    <p className="mt-1 text-xs text-muted-foreground max-w-sm">
-                      Link the patient's moodie app account above to view their
-                      self-reported check-ins and journal entries here.
-                    </p>
-                  </CardContent>
-                </Card>
-              )}
+              {!mobileActivityLoading &&
+                !mobileActivityError &&
+                !mobileActivity?.linked && (
+                  <Card>
+                    <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+                      <Smartphone className="h-10 w-10 text-muted-foreground/40 mb-3" />
+
+                      <p className="font-medium text-sm text-muted-foreground">
+                        No mobile account linked
+                      </p>
+
+                      <p className="mt-1 text-xs text-muted-foreground max-w-sm">
+                        Link the patient's moodie app account
+                        above to view their self-reported
+                        check-ins and journal entries here.
+                      </p>
+                    </CardContent>
+                  </Card>
+                )}
 
               {/* Mood Check-ins */}
-              {(mobileActivity?.linked || mobileActivityLoading) && (
+              {(mobileActivity?.linked ||
+                mobileActivityLoading) && (
                 <Card>
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2 text-base">
                       <Activity className="h-4 w-4" />
                       Mood Check-ins
-                      {!mobileActivityLoading && mobileActivity?.moodCheckins && (
-                        <span className="ml-auto text-xs font-normal text-muted-foreground">
-                          {mobileActivity.moodCheckins.length} record
-                          {mobileActivity.moodCheckins.length !== 1 ? "s" : ""}
-                        </span>
-                      )}
+
+                      {!mobileActivityLoading &&
+                        mobileActivity?.moodCheckins && (
+                          <span className="ml-auto text-xs font-normal text-muted-foreground">
+                            {mobileActivity.moodCheckins.length}{" "}
+                            record
+                            {mobileActivity.moodCheckins.length !==
+                            1
+                              ? "s"
+                              : ""}
+                          </span>
+                        )}
                     </CardTitle>
                   </CardHeader>
+
                   <CardContent>
                     {mobileActivityLoading ? (
                       <div className="space-y-2">
-                        {Array.from({ length: 3 }).map((_, i) => (
-                          <Skeleton key={i} className="h-16 w-full" />
-                        ))}
+                        {Array.from({ length: 3 }).map(
+                          (_, i) => (
+                            <Skeleton
+                              key={i}
+                              className="h-16 w-full"
+                            />
+                          ),
+                        )}
                       </div>
                     ) : !mobileActivity?.moodCheckins ||
-                      mobileActivity.moodCheckins.length === 0 ? (
+                      mobileActivity.moodCheckins.length ===
+                        0 ? (
                       <p className="text-sm text-muted-foreground">
-                        No mood check-ins recorded yet from the mobile app.
+                        No mood check-ins recorded yet from the
+                        mobile app.
                       </p>
                     ) : (
                       <div className="space-y-3">
-                        {mobileActivity.moodCheckins.map((checkin: any) => (
-                          <div
-                            key={checkin.id}
-                            className="rounded-lg border p-3"
-                          >
-                            <div className="flex items-start justify-between gap-2">
-                              <div className="flex flex-wrap gap-1.5">
-                                {(checkin.moods as string[]).map(
-                                  (mood: string, i: number) => (
-                                    <span
-                                      key={i}
-                                      className="rounded-full bg-violet-100 px-2.5 py-0.5 text-xs font-medium text-violet-700"
-                                    >
-                                      {mood}
-                                    </span>
-                                  )
-                                )}
+                        {mobileActivity.moodCheckins.map(
+                          (checkin: any) => (
+                            <div
+                              key={checkin.id}
+                              className="rounded-lg border p-3"
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="flex flex-wrap gap-1.5">
+                                  {(
+                                    checkin.moods as string[]
+                                  ).map(
+                                    (
+                                      mood: string,
+                                      i: number,
+                                    ) => (
+                                      <span
+                                        key={i}
+                                        className="rounded-full bg-violet-100 px-2.5 py-0.5 text-xs font-medium text-violet-700"
+                                      >
+                                        {mood}
+                                      </span>
+                                    ),
+                                  )}
+                                </div>
+
+                                <span className="flex-shrink-0 text-xs text-muted-foreground">
+                                  {checkin.timestamp
+                                    ? new Date(
+                                        checkin.timestamp,
+                                      ).toLocaleDateString(
+                                        "en-US",
+                                        {
+                                          month: "short",
+                                          day: "numeric",
+                                          year: "numeric",
+                                        },
+                                      )
+                                    : "—"}
+                                </span>
                               </div>
-                              <span className="flex-shrink-0 text-xs text-muted-foreground">
-                                {checkin.timestamp
-                                  ? new Date(checkin.timestamp).toLocaleDateString(
-                                      "en-US",
-                                      {
-                                        month: "short",
-                                        day: "numeric",
-                                        year: "numeric",
-                                      }
-                                    )
-                                  : "—"}
-                              </span>
                             </div>
-                          </div>
-                        ))}
+                          ),
+                        )}
                       </div>
                     )}
                   </CardContent>
@@ -879,67 +1356,88 @@ function PatientDetailContent() {
               )}
 
               {/* Journal Entries */}
-              {(mobileActivity?.linked || mobileActivityLoading) && (
+              {(mobileActivity?.linked ||
+                mobileActivityLoading) && (
                 <Card>
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2 text-base">
                       <BookOpen className="h-4 w-4" />
                       Journal Entries
-                      {!mobileActivityLoading && mobileActivity?.journalEntries && (
-                        <span className="ml-auto text-xs font-normal text-muted-foreground">
-                          {mobileActivity.journalEntries.length} record
-                          {mobileActivity.journalEntries.length !== 1 ? "s" : ""}
-                        </span>
-                      )}
+
+                      {!mobileActivityLoading &&
+                        mobileActivity?.journalEntries && (
+                          <span className="ml-auto text-xs font-normal text-muted-foreground">
+                            {mobileActivity.journalEntries.length}{" "}
+                            record
+                            {mobileActivity.journalEntries.length !==
+                            1
+                              ? "s"
+                              : ""}
+                          </span>
+                        )}
                     </CardTitle>
                   </CardHeader>
+
                   <CardContent>
                     {mobileActivityLoading ? (
                       <div className="space-y-2">
-                        {Array.from({ length: 3 }).map((_, i) => (
-                          <Skeleton key={i} className="h-24 w-full" />
-                        ))}
+                        {Array.from({ length: 3 }).map(
+                          (_, i) => (
+                            <Skeleton
+                              key={i}
+                              className="h-24 w-full"
+                            />
+                          ),
+                        )}
                       </div>
                     ) : !mobileActivity?.journalEntries ||
-                      mobileActivity.journalEntries.length === 0 ? (
+                      mobileActivity.journalEntries.length ===
+                        0 ? (
                       <p className="text-sm text-muted-foreground">
-                        No journal entries recorded yet from the mobile app.
+                        No journal entries recorded yet from the
+                        mobile app.
                       </p>
                     ) : (
                       <div className="space-y-3">
-                        {mobileActivity.journalEntries.map((entry: any) => (
-                          <div
-                            key={entry.id}
-                            className="rounded-lg border p-3"
-                          >
-                            <div className="mb-2 flex items-center justify-between gap-2">
-                              {entry.prompt ? (
-                                <p className="text-xs font-medium text-muted-foreground italic">
-                                  Prompt: {entry.prompt}
-                                </p>
-                              ) : (
-                                <p className="text-xs font-medium text-muted-foreground italic">
-                                  Free-write entry
-                                </p>
-                              )}
-                              <span className="flex-shrink-0 text-xs text-muted-foreground">
-                                {entry.timestamp
-                                  ? new Date(entry.timestamp).toLocaleDateString(
-                                      "en-US",
-                                      {
-                                        month: "short",
-                                        day: "numeric",
-                                        year: "numeric",
-                                      }
-                                    )
-                                  : "—"}
-                              </span>
+                        {mobileActivity.journalEntries.map(
+                          (entry: any) => (
+                            <div
+                              key={entry.id}
+                              className="rounded-lg border p-3"
+                            >
+                              <div className="mb-2 flex items-center justify-between gap-2">
+                                {entry.prompt ? (
+                                  <p className="text-xs font-medium text-muted-foreground italic">
+                                    Prompt: {entry.prompt}
+                                  </p>
+                                ) : (
+                                  <p className="text-xs font-medium text-muted-foreground italic">
+                                    Free-write entry
+                                  </p>
+                                )}
+
+                                <span className="flex-shrink-0 text-xs text-muted-foreground">
+                                  {entry.timestamp
+                                    ? new Date(
+                                        entry.timestamp,
+                                      ).toLocaleDateString(
+                                        "en-US",
+                                        {
+                                          month: "short",
+                                          day: "numeric",
+                                          year: "numeric",
+                                        },
+                                      )
+                                    : "—"}
+                                </span>
+                              </div>
+
+                              <p className="text-sm leading-relaxed text-foreground whitespace-pre-wrap">
+                                {entry.entry}
+                              </p>
                             </div>
-                            <p className="text-sm leading-relaxed text-foreground whitespace-pre-wrap">
-                              {entry.entry}
-                            </p>
-                          </div>
-                        ))}
+                          ),
+                        )}
                       </div>
                     )}
                   </CardContent>

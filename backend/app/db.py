@@ -18,8 +18,6 @@ from app.models import (
     MoodEntry,
     ClinicalNote,
     RiskAlert,
-    Message,
-    MessageThread,
     Notification,
     AuditLog,
     MobileMoodCheckin,
@@ -626,51 +624,6 @@ class FirestoreDAO:
             "acknowledgedBy": therapist_uid,
         })
         return True
-
-    # ========================================================================
-    # Message Operations
-    # ========================================================================
-
-    def get_message_threads_for_therapist(self, therapist_uid: str) -> List[Dict[str, Any]]:
-        """Get all message threads for a therapist"""
-        if not self.db:
-            return []
-        docs = (
-            self.db.collection("messageThreads")
-            .where("therapistUid", "==", therapist_uid)
-            .stream()
-        )
-        rows = [
-            row
-            for row in self._stream_data(docs)
-            if row.get("isActive", True)
-        ]
-        return self._sort_by_datetime_field(rows, "lastMessageAt", reverse=True)
-
-    def get_messages_for_thread(self, thread_id: str) -> List[Dict[str, Any]]:
-        """Get all messages in a thread"""
-        if not self.db:
-            return []
-        docs = (
-            self.db.collection("messages")
-            .where("threadId", "==", thread_id)
-            .stream()
-        )
-        return self._sort_by_datetime_field(self._stream_data(docs), "createdAt")
-
-    def create_message_thread(self, thread: MessageThread) -> str:
-        """Create a new message thread"""
-        if not self.db:
-            raise Exception("Firestore not configured")
-        doc_ref = self.db.collection("messageThreads").add(thread.model_dump(by_alias=False))
-        return doc_ref[1].id
-
-    def create_message(self, message: Message) -> str:
-        """Create a new message"""
-        if not self.db:
-            raise Exception("Firestore not configured")
-        doc_ref = self.db.collection("messages").add(message.model_dump(by_alias=False))
-        return doc_ref[1].id
 
     # ========================================================================
     # Notification Operations

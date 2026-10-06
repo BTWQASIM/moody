@@ -225,35 +225,6 @@ class RiskAlert(BaseModel):
 
 
 # ============================================================================
-# Message Models (Therapist-Patient messaging)
-# ============================================================================
-
-class Message(BaseModel):
-    id: str  # Firestore auto-generated
-    threadId: str  # Conversation thread ID
-    senderId: str  # Therapist UID or Patient ID
-    senderType: str  # "therapist" or "patient"
-    recipientId: str
-    content: str
-    attachments: List[str] = Field(default_factory=list)  # URLs
-    isRead: bool = False
-    readAt: Optional[datetime] = None
-    createdAt: datetime = Field(default_factory=datetime.utcnow)
-
-
-class MessageThread(BaseModel):
-    id: str  # Firestore auto-generated
-    therapistUid: str
-    patientId: str
-    subject: str
-    lastMessage: str
-    lastMessageAt: datetime
-    isActive: bool = True
-    createdAt: datetime = Field(default_factory=datetime.utcnow)
-    updatedAt: datetime = Field(default_factory=datetime.utcnow)
-
-
-# ============================================================================
 # Notification Models
 # ============================================================================
 

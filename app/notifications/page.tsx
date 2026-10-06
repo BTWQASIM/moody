@@ -7,6 +7,7 @@ import { PortalShell } from "@/components/portal-shell"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { useNotifications } from "@/lib/hooks"
 import {
   CalendarPlus,
   AlertTriangle,
@@ -54,57 +55,22 @@ export default function NotificationsPage() {
 }
 
 function NotificationsContent() {
-  const { user, role } = useAuth()
+  const { role } = useAuth()
+  const {
+    data: notifications,
+    loading,
+    error,
+  } = useNotifications()
   const [items, setItems] = useState<NotificationRow[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState("")
+
+  useEffect(() => {
+    setItems((notifications as NotificationRow[]) || [])
+  }, [notifications])
 
   const unreadCount = useMemo(
     () => items.filter((i) => !i.isRead).length,
     [items],
   )
-
-  useEffect(() => {
-    let cancelled = false
-
-    async function loadNotifications() {
-      if (!user) return
-      setLoading(true)
-      setError("")
-
-      try {
-        const token = await user.getIdToken()
-        const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
-        const response = await fetch(`${apiBase}/api/notifications/`, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        })
-
-        if (!response.ok) {
-          throw new Error("Failed to load notifications")
-        }
-
-        const result = await response.json()
-        if (cancelled) return
-        setItems((result?.notifications as NotificationRow[]) || [])
-      } catch (err: any) {
-        if (!cancelled) {
-          setError(err.message || "Failed to load notifications")
-          setItems([])
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false)
-        }
-      }
-    }
-
-    loadNotifications()
-    return () => {
-      cancelled = true
-    }
-  }, [user])
 
   return (
     <PortalShell title="Notifications" subtitle={`${unreadCount} unread updates`}>
@@ -119,7 +85,7 @@ function NotificationsContent() {
       </div>
       <Card>
         <CardContent className="divide-y divide-border p-0">
-          {error ? <div className="p-4 text-sm text-destructive">{error}</div> : null}
+          {error ? <div className="p-4 text-sm text-destructive">{error.message}</div> : null}
           {loading ? <div className="p-4 text-sm text-muted-foreground">Loading notifications...</div> : null}
 
           {!loading && !items.length ? (

@@ -64,7 +64,6 @@ function DashboardContent() {
     }
   }, [patients, appointments, alerts])
 
-  const isLoading = patientsLoading || appointmentsLoading || alertsLoading
   const displayName = user?.displayName?.trim() || user?.email?.split("@")[0] || "Therapist"
 
   const StatCardSkeleton = () => (
@@ -94,61 +93,63 @@ function DashboardContent() {
       )}
 
       <div className="grid gap-4 lg:grid-cols-3">
-        {isLoading ? (
-          <>
-            <StatCardSkeleton />
-            <StatCardSkeleton />
-            <StatCardSkeleton />
-          </>
+        {patientsLoading ? (
+          <StatCardSkeleton />
         ) : (
-          <>
-            <StatCard
-              title="Patients"
-              icon={Users}
-              accent="primary"
-              items={[
-                { label: "Total", value: stats.totalPatients },
-                { label: "Active", value: stats.activePatients },
-                {
-                  label: "High Risk",
-                  value: stats.highRiskCount,
-                  emphasis: "danger",
-                },
-              ]}
-            />
-            <StatCard
-              title="Appointments"
-              icon={CalendarClock}
-              accent="success"
-              items={[
-                { label: "Today", value: stats.todayAppointments },
-                { label: "Upcoming", value: stats.upcomingAppointments },
-                {
-                  label: "Pending",
-                  value: stats.pendingAppointments,
-                  emphasis: "warning",
-                },
-              ]}
-            />
-            <StatCard
-              title="AI Insights"
-              icon={Sparkles}
-              accent="primary"
-              items={[
-                {
-                  label: "Risk Alerts",
-                  value: stats.riskAlerts,
-                  emphasis: stats.riskAlerts > 0 ? "danger" : undefined,
-                },
-                { label: "High Risk", value: stats.highRiskCount },
-                {
-                  label: "Critical",
-                  value: stats.criticalAlerts,
-                  emphasis: stats.criticalAlerts > 0 ? "danger" : undefined,
-                },
-              ]}
-            />
-          </>
+          <StatCard
+            title="Patients"
+            icon={Users}
+            accent="primary"
+            items={[
+              { label: "Total", value: stats.totalPatients },
+              { label: "Active", value: stats.activePatients },
+              {
+                label: "High Risk",
+                value: stats.highRiskCount,
+                emphasis: "danger",
+              },
+            ]}
+          />
+        )}
+        {appointmentsLoading ? (
+          <StatCardSkeleton />
+        ) : (
+          <StatCard
+            title="Appointments"
+            icon={CalendarClock}
+            accent="success"
+            items={[
+              { label: "Today", value: stats.todayAppointments },
+              { label: "Upcoming", value: stats.upcomingAppointments },
+              {
+                label: "Pending",
+                value: stats.pendingAppointments,
+                emphasis: "warning",
+              },
+            ]}
+          />
+        )}
+        {patientsLoading || alertsLoading ? (
+          <StatCardSkeleton />
+        ) : (
+          <StatCard
+            title="AI Insights"
+            icon={Sparkles}
+            accent="primary"
+            items={[
+              {
+                label: "Risk Alerts",
+                value: stats.riskAlerts,
+                emphasis: stats.riskAlerts > 0 ? "danger" : undefined,
+              },
+              { label: "High Risk", value: stats.highRiskCount },
+              {
+                label: "Critical",
+                value: stats.criticalAlerts,
+                emphasis: stats.criticalAlerts > 0 ? "danger" : undefined,
+              },
+            ]}
+          />
         )}
       </div>
 

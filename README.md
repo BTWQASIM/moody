@@ -4,7 +4,7 @@ Next.js therapist and admin portal with a FastAPI backend. Shares the **Ping My 
 
 ## What this repo includes
 
-- **Therapist portal** — dashboard, patients, appointments, messages, settings, availability
+- **Therapist portal** — dashboard, patients, appointments, settings, availability
 - **Admin portal** — therapist approval, access control, notifications
 - **Backend API** — Firebase Auth verification, Firestore, file uploads, AI tasks (Celery + Redis)
 - **Mobile integration** — link portal patients to mobile Firebase UIDs; view mood check-ins and journal entries; accept/decline appointment requests from the app

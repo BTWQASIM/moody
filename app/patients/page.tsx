@@ -16,7 +16,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { usePatients, useUpdatePatient, useCreatePatient } from "@/lib/hooks"
+import {
+  invalidateQueryCache,
+  usePatients,
+  useUpdatePatient,
+  useCreatePatient,
+} from "@/lib/hooks"
 import {
   Search,
   Plus,
@@ -82,7 +87,11 @@ function PatientsContent() {
         const matchesQuery = fullName.includes(query.toLowerCase()) ||
           (p.email || "").toLowerCase().includes(query.toLowerCase())
         const matchesRisk = riskFilter === "all" || p.riskLevel === riskFilter
-        const matchesStatus = statusFilter === "all" || p.status === statusFilter
+        const matchesStatus =
+          statusFilter === "inactive"
+            ? p.status === "inactive"
+            : p.status !== "inactive" &&
+              (statusFilter === "all" || p.status === statusFilter)
         return matchesQuery && matchesRisk && matchesStatus
       })
       .sort((a: any, b: any) => {
@@ -125,6 +134,7 @@ function PatientsContent() {
         phoneNumber: "",
       })
       setIsNewPatientOpen(false)
+      invalidateQueryCache("patients")
       setRefreshKey((key) => key + 1)
     } catch (err) {
       setCreateFormError(

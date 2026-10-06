@@ -49,7 +49,7 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
-  resolvePatientForAppointment,
+  getResolvedPatientName,
   resolvePortalPatientId,
 } from "@/lib/patient-mapping"
 
@@ -103,11 +103,13 @@ function toDatetimeLocalValue(value?: string | Date) {
 }
 
 function resolvePatientName(apt: Appointment, patients: Patient[]): string {
-  const patient = resolvePatientForAppointment(apt, patients)
-  if (patient) {
-    return `${patient.firstName || ""} ${patient.lastName || ""}`.trim()
-  }
-  return apt.patientName || "Unknown Patient"
+  return (
+    getResolvedPatientName(apt, patients) ||
+    (apt.patientName &&
+    !["unknown", "individual", "n/a"].includes(apt.patientName.trim().toLowerCase())
+      ? apt.patientName.trim()
+      : "Unknown Patient")
+  )
 }
 
 // ============================================================================
@@ -400,10 +402,12 @@ function CreateAppointmentDialog({
   open,
   onOpenChange,
   patients,
+  onCreated,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   patients: Patient[]
+  onCreated: () => void | Promise<void>
 }) {
   const { execute, loading, error } = useCreateAppointment()
   const [formData, setFormData] = useState({
@@ -442,6 +446,7 @@ function CreateAppointmentDialog({
         notes: formData.notes,
       })
 
+      await onCreated()
       setFormData({
         patientId: "",
         scheduledAt: "",
@@ -932,6 +937,9 @@ function AppointmentsPageContent() {
               open={createDialogOpen}
               onOpenChange={setCreateDialogOpen}
               patients={patientsList}
+              onCreated={async () => {
+                await Promise.all([refetchAppointments(), refetchPatients()])
+              }}
             />
           </Dialog>
         </div>

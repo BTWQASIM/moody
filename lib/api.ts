@@ -288,35 +288,6 @@ export const alertsAPI = {
 };
 
 /**
- * Messages API
- */
-export const messagesAPI = {
-  async listThreads() {
-    return apiCall("/api/messages/threads");
-  },
-
-  async createThread(data: {
-    patientId: string;
-    subject: string;
-  }) {
-    return apiCall("/api/messages/threads", "POST", data);
-  },
-
-  async getThreadMessages(threadId: string) {
-    return apiCall(`/api/messages/threads/${threadId}`);
-  },
-
-  async sendMessage(data: {
-    threadId: string;
-    recipientId: string;
-    content: string;
-    attachments?: any[];
-  }) {
-    return apiCall("/api/messages/", "POST", data);
-  },
-};
-
-/**
  * Notifications API
  */
 export const notificationsAPI = {

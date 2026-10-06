@@ -4,7 +4,8 @@ import Link from "next/link"
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
-import { useAppointments } from "@/lib/hooks"
+import { useAppointments, usePatients } from "@/lib/hooks"
+import { getResolvedPatientName } from "@/lib/patient-mapping"
 import { Clock, ChevronRight } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -30,6 +31,7 @@ function formatDay(dateString: string) {
 
 export function UpcomingAppointments() {
   const { data: appointments, loading } = useAppointments()
+  const { data: patients } = usePatients()
 
   const now = useMemo(() => new Date(), [])
   const today = useMemo(() => {
@@ -39,14 +41,14 @@ export function UpcomingAppointments() {
   }, [now])
 
   const { todayAppointments, upcomingAppointments } = useMemo(() => {
-    if (!appointments) return { todayAppointments: [], upcomingAppointments: [] }
+    const appointmentList = Array.isArray(appointments) ? appointments : []
 
     const tomorrow = new Date(today)
     tomorrow.setDate(tomorrow.getDate() + 1)
     const nextWeek = new Date(today)
     nextWeek.setDate(nextWeek.getDate() + 7)
 
-    const today_ = appointments
+    const today_ = appointmentList
       .filter((a: any) => {
         const aptDate = new Date(a.scheduledAt)
         aptDate.setHours(0, 0, 0, 0)
@@ -58,7 +60,7 @@ export function UpcomingAppointments() {
           new Date(b.scheduledAt).getTime()
       )
 
-    const upcoming = appointments
+    const upcoming = appointmentList
       .filter((a: any) => {
         const aptDate = new Date(a.scheduledAt)
         return aptDate >= tomorrow && aptDate < nextWeek
@@ -114,6 +116,7 @@ export function UpcomingAppointments() {
                     <AppointmentRow
                       key={a.id}
                       appointment={a}
+                      patients={(patients as any[]) || []}
                       highlight
                     />
                   ))}
@@ -127,7 +130,11 @@ export function UpcomingAppointments() {
                 </p>
                 <div className="space-y-2">
                   {upcomingAppointments.map((a: any) => (
-                    <AppointmentRow key={a.id} appointment={a} />
+                    <AppointmentRow
+                      key={a.id}
+                      appointment={a}
+                      patients={(patients as any[]) || []}
+                    />
                   ))}
                 </div>
               </div>
@@ -147,11 +154,16 @@ export function UpcomingAppointments() {
 
 function AppointmentRow({
   appointment,
+  patients,
   highlight,
 }: {
   appointment: any
+  patients: any[]
   highlight?: boolean
 }) {
+  const patientName =
+    getResolvedPatientName(appointment, patients) || "Unknown Patient"
+
   return (
     <Link href={`/appointments`}>
       <div
@@ -178,15 +190,15 @@ function AppointmentRow({
               appointment.patientProfilePhoto ||
               "/placeholder.svg"
             }
-            alt={`${appointment.patientFirstName} ${appointment.patientLastName}`}
+            alt={patientName}
           />
           <AvatarFallback className="text-xs">
-            {appointment.patientFirstName?.[0]}
+            {patientName[0]}
           </AvatarFallback>
         </Avatar>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-foreground">
-            {`${appointment.patientFirstName} ${appointment.patientLastName}`}
+            {patientName}
           </p>
           <p className="truncate text-xs text-muted-foreground">
             {appointment.type || "Therapy Session"}

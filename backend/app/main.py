@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from app.firebase import get_firebase_app
-from app.api import health, auth, patients, appointments, services, mood, notes, alerts, messages, notifications, uploads, ai
+from app.api import health, auth, patients, appointments, services, mood, notes, alerts, notifications, uploads, ai
 
 app = FastAPI(title="Moody Therapist Portal API")
 
@@ -32,7 +32,6 @@ app.include_router(services.router, tags=["Services"])
 app.include_router(mood.router, tags=["Mood"])
 app.include_router(notes.router, tags=["Clinical Notes"])
 app.include_router(alerts.router, tags=["Risk Alerts"])
-app.include_router(messages.router, tags=["Messages"])
 app.include_router(notifications.router, tags=["Notifications"])
 app.include_router(uploads.router, tags=["File Uploads"])
 app.include_router(ai.router, tags=["AI Operations"])

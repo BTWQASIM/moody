@@ -20,6 +20,7 @@ import {
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
 import { Sidebar } from "@/components/sidebar"
 import { terminatePortalSession } from "@/lib/auth-session"
+import { useNotifications } from "@/lib/hooks"
 
 type TherapistProfile = {
   name?: string
@@ -54,7 +55,9 @@ export function Topbar({ title, subtitle }: { title: string; subtitle?: string }
   const { user, role, verified } = useAuth()
   const [profile, setProfile] = useState<TherapistProfile | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
-  const [unreadCount, setUnreadCount] = useState(0)
+  const { data: notifications } = useNotifications()
+  const unreadCount = ((notifications as Array<{ isRead?: boolean }> | null) || [])
+    .filter((notification) => !notification.isRead).length
 
   useEffect(() => {
     let cancelled = false
@@ -89,45 +92,6 @@ export function Topbar({ title, subtitle }: { title: string; subtitle?: string }
     }
 
     loadProfile()
-    return () => {
-      cancelled = true
-    }
-  }, [user, pathname])
-
-  useEffect(() => {
-    let cancelled = false
-
-    async function loadUnread() {
-      if (!user) {
-        setUnreadCount(0)
-        return
-      }
-
-      try {
-        const idToken = await user.getIdToken()
-        const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
-        const response = await fetch(`${apiBase}/api/notifications/`, {
-          headers: {
-            Authorization: `Bearer ${idToken}`,
-          },
-        })
-
-        if (!response.ok) {
-          throw new Error("Failed to load notifications")
-        }
-
-        const result = await response.json()
-        if (!cancelled) {
-          setUnreadCount(Number(result?.unreadCount || 0))
-        }
-      } catch {
-        if (!cancelled) {
-          setUnreadCount(0)
-        }
-      }
-    }
-
-    loadUnread()
     return () => {
       cancelled = true
     }

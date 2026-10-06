@@ -69,23 +69,6 @@ export interface Service {
   active: boolean
 }
 
-export interface Message {
-  id: string
-  fromPatient: boolean
-  text: string
-  time: string
-}
-
-export interface Conversation {
-  patientId: string
-  patientName: string
-  patientAvatar: string
-  lastMessage: string
-  lastTime: string
-  unread: number
-  messages: Message[]
-}
-
 export const therapist = {
   name: "Dr. Elena Hart",
   title: "Licensed Clinical Psychologist",
@@ -305,47 +288,6 @@ export const services: Service[] = [
   { id: "s3", name: "PTSD Treatment", description: "Trauma-focused therapy including TF-CBT and EMDR-informed approaches.", duration: 60, fee: 210, specialization: "Trauma", active: true },
   { id: "s4", name: "Child Psychology", description: "Play-based and family-inclusive therapy for children and adolescents.", duration: 45, fee: 160, specialization: "Pediatric", active: true },
   { id: "s5", name: "Addiction Recovery", description: "Relapse prevention and motivational interviewing for substance use.", duration: 60, fee: 195, specialization: "Addiction", active: false },
-]
-
-export const conversations: Conversation[] = [
-  {
-    patientId: "p1",
-    patientName: "Marcus Reed",
-    patientAvatar: "/patient-marcus.png",
-    lastMessage: "Thank you, I'll try the breathing exercise tonight.",
-    lastTime: "12 min ago",
-    unread: 2,
-    messages: [
-      { id: "m1", fromPatient: true, text: "Hi Dr. Hart, I've been having a really rough couple of days.", time: "9:02 AM" },
-      { id: "m2", fromPatient: false, text: "I'm glad you reached out, Marcus. Can you tell me a bit more about what's been happening?", time: "9:10 AM" },
-      { id: "m3", fromPatient: true, text: "Just feeling really low and not sleeping well.", time: "9:14 AM" },
-      { id: "m4", fromPatient: false, text: "That sounds exhausting. Let's review your safety plan together. In the meantime, try the 4-7-8 breathing exercise we practiced.", time: "9:18 AM" },
-      { id: "m5", fromPatient: true, text: "Thank you, I'll try the breathing exercise tonight.", time: "9:21 AM" },
-    ],
-  },
-  {
-    patientId: "p2",
-    patientName: "Aisha Okafor",
-    patientAvatar: "/patient-aisha.png",
-    lastMessage: "Could we move our session to Thursday?",
-    lastTime: "1 hour ago",
-    unread: 1,
-    messages: [
-      { id: "m1", fromPatient: true, text: "Could we move our session to Thursday?", time: "10:30 AM" },
-    ],
-  },
-  {
-    patientId: "p4",
-    patientName: "Sofia Martinez",
-    patientAvatar: "/patient-sofia.png",
-    lastMessage: "Feeling much more in control this week!",
-    lastTime: "Yesterday",
-    unread: 0,
-    messages: [
-      { id: "m1", fromPatient: true, text: "Feeling much more in control this week!", time: "4:45 PM" },
-      { id: "m2", fromPatient: false, text: "That's wonderful to hear, Sofia. Keep using those coping strategies.", time: "5:01 PM" },
-    ],
-  },
 ]
 
 // Chart data
