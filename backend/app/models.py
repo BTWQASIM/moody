@@ -140,7 +140,9 @@ class PatientProfile(BaseModel):
 
 class AppointmentDetails(BaseModel):
     therapistUid: str
+    therapistName: Optional[str] = None
     patientId: str
+    portalPatientId: Optional[str] = None
     scheduledAt: datetime
     duration: int  # Minutes
     type: str  # e.g., "individual", "couples", "group"

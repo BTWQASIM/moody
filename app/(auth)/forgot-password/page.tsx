@@ -3,12 +3,42 @@
 import Link from "next/link"
 import { useState } from "react"
 import { ArrowLeft, Mail, CheckCircle2 } from "lucide-react"
+import { sendPasswordResetEmail } from "firebase/auth"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { auth } from "@/lib/firebase"
 
 export default function ForgotPasswordPage() {
   const [sent, setSent] = useState(false)
+  const [email, setEmail] = useState("")
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState("")
+
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setError("")
+    setLoading(true)
+
+    try {
+      await sendPasswordResetEmail(auth, email.trim())
+      setSent(true)
+    } catch (err: unknown) {
+      const firebaseError = err as { code?: string }
+
+      if (firebaseError.code === "auth/too-many-requests") {
+        setError("Too many reset attempts. Please wait a while and try again.")
+      } else if (firebaseError.code === "auth/network-request-failed") {
+        setError("Unable to connect. Check your internet connection and try again.")
+      } else if (firebaseError.code === "auth/invalid-email") {
+        setError("Please enter a valid email address.")
+      } else {
+        setError("Unable to send the reset email right now. Please try again.")
+      }
+    } finally {
+      setLoading(false)
+    }
+  }
 
   return (
     <div className="space-y-8">
@@ -34,21 +64,29 @@ export default function ForgotPasswordPage() {
             </p>
           </div>
           <form
-            onSubmit={(e) => {
-              e.preventDefault()
-              setSent(true)
-            }}
+            onSubmit={handleSubmit}
             className="space-y-5"
           >
             <div className="space-y-2">
               <Label htmlFor="email">Email address</Label>
               <div className="relative">
                 <Mail className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                <Input id="email" type="email" required placeholder="you@clinic.com" className="bg-card pl-9" />
+                <Input
+                  id="email"
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  disabled={loading}
+                  autoComplete="email"
+                  placeholder="you@clinic.com"
+                  className="bg-card pl-9"
+                />
               </div>
             </div>
-            <Button type="submit" className="w-full" size="lg">
-              Send reset link
+            {error ? <p className="text-sm text-destructive">{error}</p> : null}
+            <Button type="submit" className="w-full" size="lg" disabled={loading}>
+              {loading ? "Sending..." : "Send reset link"}
             </Button>
           </form>
         </>

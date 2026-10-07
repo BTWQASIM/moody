@@ -334,6 +334,10 @@ export const uploadsAPI = {
  * AI Operations API
  */
 export const aiAPI = {
+  async extractNotesFile(file: File) {
+    return uploadFile("/api/ai/extract-document", file);
+  },
+
   async submitSummarizeTask(appointmentId: string, content: string) {
     return apiCall("/api/ai/summarize", "POST", {
       appointmentId,

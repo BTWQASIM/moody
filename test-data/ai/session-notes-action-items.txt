@@ -1,0 +1,18 @@
+SYNTHETIC TEST DATA — NOT A REAL PATIENT RECORD
+
+Session date: 2026-10-06
+Session type: Individual therapy
+
+The patient described difficulty maintaining a regular sleep schedule. They usually go to bed between 1:00 AM and 2:00 AM, use their phone in bed, and wake feeling tired. Low energy has made it harder to attend morning classes and complete assignments. Mood was reported as 5/10, compared with 3/10 during the previous week.
+
+Agreements made during the session:
+1. The patient will place the phone outside the bedroom by 11:00 PM on at least five nights before the next session.
+2. The patient will record bedtime, wake time, and morning energy level each day for seven days.
+3. The patient will take a ten-minute walk after lunch on Monday, Wednesday, and Friday.
+4. The therapist will email a one-page sleep-hygiene worksheet within two working days.
+5. The therapist will review the sleep diary and mood trend at the next appointment.
+
+The patient expressed confidence of 7/10 in completing the sleep diary and 6/10 in keeping the phone outside the bedroom. Barriers discussed included late-night group messages and unfinished coursework. The patient plans to enable Do Not Disturb mode and notify classmates of the new schedule.
+
+Risk assessment:
+The patient denied suicidal thoughts, self-harm, and intent to harm others. No acute risk was identified.

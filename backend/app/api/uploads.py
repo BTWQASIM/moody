@@ -3,14 +3,27 @@ File upload and management API endpoints
 Handles profile photos, documents, recordings, and exports
 """
 
+from io import BytesIO
 from pathlib import Path
 from typing import Optional
-from fastapi import APIRouter, HTTPException, status, Header, UploadFile, File, Form
+from fastapi import (
+    APIRouter,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from firebase_admin import auth as firebase_auth, storage
 from datetime import datetime, timedelta
 import os
 import re
 import secrets
+
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from app.db import FirestoreDAO
 
@@ -20,6 +33,9 @@ LOCAL_UPLOADS_ROOT = Path(os.getenv("LOCAL_UPLOADS_DIR", "./uploads")).resolve()
 LOCAL_UPLOADS_URL_BASE = os.getenv(
     "LOCAL_UPLOADS_URL_BASE", "http://localhost:8000/uploads"
 ).rstrip("/")
+PROFILE_PHOTO_SIZE = (512, 512)
+PROFILE_PHOTO_MAX_BYTES = 700 * 1024
+PROFILE_PHOTO_MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 
 
 def verify_token(authorization: str = Header(...)):
@@ -98,8 +114,54 @@ def upload_to_storage_or_local(file_path: str, contents: bytes, content_type: st
         return local_upload(file_path, contents)
 
 
+def normalize_profile_photo(contents: bytes) -> bytes:
+    """Resize a profile image to a Firestore-safe, mobile-friendly JPEG."""
+    try:
+        with Image.open(BytesIO(contents)) as source:
+            image = ImageOps.exif_transpose(source)
+            image.thumbnail(PROFILE_PHOTO_SIZE, Image.Resampling.LANCZOS)
+
+            if image.mode in ("RGBA", "LA"):
+                background = Image.new("RGB", image.size, "white")
+                alpha = image.getchannel("A")
+                background.paste(image.convert("RGB"), mask=alpha)
+                image = background
+            elif image.mode != "RGB":
+                image = image.convert("RGB")
+
+            for quality in (85, 75, 65, 55, 45):
+                output = BytesIO()
+                image.save(output, format="JPEG", quality=quality, optimize=True)
+                normalized = output.getvalue()
+                if len(normalized) <= PROFILE_PHOTO_MAX_BYTES:
+                    return normalized
+    except (
+        UnidentifiedImageError,
+        Image.DecompressionBombError,
+        OSError,
+        ValueError,
+    ) as err:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or unsupported image file",
+        ) from err
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Profile photo is too large after resizing",
+    )
+
+
+def profile_photo_url(user_id: str, version: str, request: Request) -> str:
+    base_url = os.getenv("PUBLIC_API_URL", "").rstrip("/")
+    if not base_url:
+        base_url = str(request.base_url).rstrip("/")
+    return f"{base_url}/api/uploads/profile-photo/{user_id}?v={version}"
+
+
 @router.post("/profile-photo")
 async def upload_profile_photo(
+    request: Request,
     file: UploadFile = File(...),
     authorization: str = Header(...),
 ):
@@ -113,28 +175,41 @@ async def upload_profile_photo(
             detail="File must be an image",
         )
 
-    if file.size and file.size > 5 * 1024 * 1024:  # 5MB limit
+    if file.size and file.size > PROFILE_PHOTO_MAX_UPLOAD_BYTES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="File too large (max 5MB)",
         )
 
     try:
-        # Determine file extension
         contents = await file.read()
-        ext = file.filename.split(".")[-1] if file.filename else "jpg"
-        ext = sanitize_segment(ext.lower())
-        file_path = (
-            f"profile-photos/{sanitize_segment(user_id)}/"
-            f"{datetime.utcnow().timestamp()}-{secrets.token_hex(4)}.{ext}"
+        if len(contents) > PROFILE_PHOTO_MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="File too large (max 5MB)",
+            )
+        normalized = normalize_profile_photo(contents)
+        if not db.db:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Firestore is not configured",
+            )
+
+        version = secrets.token_urlsafe(8)
+        db.db.collection("profilePhotos").document(user_id).set(
+            {
+                "content": normalized,
+                "contentType": "image/jpeg",
+                "updatedAt": datetime.utcnow(),
+            }
         )
-        file_url = upload_to_storage_or_local(file_path, contents, file.content_type)
+        file_url = profile_photo_url(user_id, version, request)
 
         return {
             "status": "success",
             "message": "Profile photo uploaded",
             "fileUrl": file_url,
-            "filePath": file_path,
+            "filePath": f"profilePhotos/{user_id}",
         }
     except HTTPException:
         raise
@@ -143,6 +218,37 @@ async def upload_profile_photo(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Upload failed: {str(err)}",
         )
+
+
+@router.get("/profile-photo/{user_id}")
+async def get_profile_photo(user_id: str):
+    """Serve a therapist profile thumbnail from persistent Firestore storage."""
+    if not db.db:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Firestore is not configured",
+        )
+
+    photo = db.db.collection("profilePhotos").document(user_id).get()
+    if not photo.exists:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Profile photo not found",
+        )
+
+    data = photo.to_dict() or {}
+    contents = data.get("content")
+    if not isinstance(contents, bytes):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Profile photo not found",
+        )
+
+    return Response(
+        content=contents,
+        media_type=str(data.get("contentType") or "image/jpeg"),
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
 
 
 @router.post("/document")

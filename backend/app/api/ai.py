@@ -1,13 +1,13 @@
-"""
-AI-powered operations API endpoints
-Integrates Gemini models for transcription, summarization, and analysis
-"""
+"""AI-powered operations API endpoints."""
 
-from typing import Optional
-from fastapi import APIRouter, HTTPException, status, Header, BackgroundTasks
+from io import BytesIO
+from pathlib import Path
+
+from docx import Document
+from fastapi import APIRouter, File, Header, HTTPException, UploadFile, status
 from firebase_admin import auth as firebase_auth
 from pydantic import BaseModel
-from datetime import datetime
+from pypdf import PdfReader
 
 from app.db import FirestoreDAO
 from app.tasks import (
@@ -18,6 +18,9 @@ from app.tasks import (
 
 router = APIRouter(prefix="/api/ai", tags=["AI"])
 db = FirestoreDAO()
+MAX_NOTES_FILE_BYTES = 5 * 1024 * 1024
+MAX_EXTRACTED_CHARACTERS = 50_000
+SUPPORTED_NOTES_EXTENSIONS = {".txt", ".pdf", ".docx"}
 
 
 class SummarizeNotesRequest(BaseModel):
@@ -50,6 +53,104 @@ def verify_token(authorization: str = Header(...)):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid token: {str(err)}",
         )
+
+
+def _clean_extracted_text(text: str) -> str:
+    lines = [line.strip() for line in text.replace("\x00", "").splitlines()]
+    cleaned: list[str] = []
+    previous_blank = False
+    for line in lines:
+        is_blank = not line
+        if is_blank and previous_blank:
+            continue
+        cleaned.append(line)
+        previous_blank = is_blank
+    return "\n".join(cleaned).strip()
+
+
+def extract_notes_text(filename: str, contents: bytes) -> str:
+    """Extract plain text from a supported therapist notes document."""
+    extension = Path(filename or "").suffix.lower()
+    if extension not in SUPPORTED_NOTES_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported file type. Upload a TXT, PDF, or DOCX file.",
+        )
+
+    try:
+        if extension == ".txt":
+            text = contents.decode("utf-8-sig")
+        elif extension == ".pdf":
+            reader = PdfReader(BytesIO(contents))
+            if reader.is_encrypted:
+                raise ValueError("Password-protected PDFs are not supported")
+            text = "\n\n".join(page.extract_text() or "" for page in reader.pages)
+        else:
+            document = Document(BytesIO(contents))
+            blocks = [paragraph.text for paragraph in document.paragraphs]
+            for table in document.tables:
+                for row in table.rows:
+                    blocks.append(" | ".join(cell.text for cell in row.cells))
+            text = "\n".join(blocks)
+    except (UnicodeDecodeError, ValueError, OSError, KeyError) as err:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Could not read {extension[1:].upper()} file: {str(err)}",
+        ) from err
+    except Exception as err:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The uploaded document is invalid or corrupted.",
+        ) from err
+
+    cleaned = _clean_extracted_text(text)
+    if not cleaned:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "No readable text was found. Scanned PDFs must be converted with "
+                "OCR before uploading."
+            ),
+        )
+    if len(cleaned) > MAX_EXTRACTED_CHARACTERS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"The extracted notes exceed {MAX_EXTRACTED_CHARACTERS:,} "
+                "characters. Upload a shorter document."
+            ),
+        )
+    return cleaned
+
+
+@router.post("/extract-document")
+async def extract_notes_document(
+    file: UploadFile = File(...),
+    authorization: str = Header(...),
+):
+    """Extract notes text for review before an AI task is submitted."""
+    verify_token(authorization)
+    if file.size and file.size > MAX_NOTES_FILE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File too large (max 5 MB)",
+        )
+
+    contents = await file.read()
+    if len(contents) > MAX_NOTES_FILE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File too large (max 5 MB)",
+        )
+
+    filename = file.filename or "notes.txt"
+    content = extract_notes_text(filename, contents)
+    return {
+        "status": "success",
+        "filename": filename,
+        "content": content,
+        "characterCount": len(content),
+    }
 
 
 @router.post("/summarize")

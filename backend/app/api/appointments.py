@@ -157,9 +157,26 @@ async def create_appointment(
                 detail="This patient does not belong to you",
             )
 
+        firebase_uid = str(patient.get("firebaseUid") or "").strip()
+        if not firebase_uid:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "This patient must be linked to their mobile account before "
+                    "an appointment can be scheduled"
+                ),
+            )
+
+        therapist = db.get_therapist(therapist_uid) or {}
+        therapist_name = str(
+            therapist.get("name") or decoded.get("name") or "Therapist"
+        ).strip()
+
         appointment = AppointmentDetails(
             therapistUid=therapist_uid,
-            patientId=request.patientId,
+            therapistName=therapist_name,
+            patientId=firebase_uid,
+            portalPatientId=request.patientId,
             scheduledAt=request.scheduledAt,
             duration=request.duration,
             type=request.type,

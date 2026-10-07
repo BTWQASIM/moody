@@ -393,15 +393,25 @@ class FirestoreDAO:
         return self._sort_by_scheduled_at(rows)
 
     def get_appointments_for_patient(self, patient_id: str) -> List[Dict[str, Any]]:
-        """Get appointments for a patient"""
+        """Get appointments by Firebase UID or portal patient document ID."""
         if not self.db:
             return []
-        docs = (
-            self.db.collection("appointments")
-            .where("patientId", "==", patient_id)
-            .stream()
-        )
-        return self._sort_by_scheduled_at(self._stream_data(docs))
+
+        rows_by_id: Dict[str, Dict[str, Any]] = {}
+        for field in ("patientId", "portalPatientId"):
+            docs = (
+                self.db.collection("appointments")
+                .where(field, "==", patient_id)
+                .stream()
+            )
+            for doc in docs:
+                data = cast(Any, doc).to_dict()
+                if not isinstance(data, dict):
+                    continue
+                data["id"] = cast(Any, doc).id
+                rows_by_id[data["id"]] = data
+
+        return self._sort_by_scheduled_at(list(rows_by_id.values()))
 
     def create_appointment(self, appointment: AppointmentDetails) -> str:
         """Create a new appointment"""

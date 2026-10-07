@@ -22,16 +22,41 @@ class AIClientTests(unittest.TestCase):
     def test_all_features_use_shared_generation(self):
         client = AIClient()
         with patch.object(client, "_generate_text", return_value="test response"):
-            results = [
-                client.summarize_text("notes"),
-                client.extract_action_items("session"),
-                client.prepare_progress_report("Patient", 1, ["session"]),
-            ]
+            summary = client.summarize_text("notes")
+            report = client.prepare_progress_report("Patient", 1, ["session"])
+        with patch.object(
+            client,
+            "_generate_text",
+            return_value=(
+                '[{"title":"Practise breathing","forPatient":true,'
+                '"dueDate":"Before next session"}]'
+            ),
+        ):
+            actions = client.extract_action_items("session")
 
-        self.assertTrue(all(results))
+        self.assertTrue(summary)
+        self.assertTrue(report)
+        self.assertEqual(
+            actions["action_items"][0],
+            {
+                "title": "Practise breathing",
+                "forPatient": True,
+                "dueDate": "Before next session",
+            },
+        )
+
+    def test_action_items_accept_json_code_fence(self):
+        parsed = AIClient._parse_action_items(
+            '```json\n[{"title":"Review diary","for_patient":false,'
+            '"due_date":"Next appointment"}]\n```'
+        )
+
+        self.assertEqual(parsed[0]["title"], "Review diary")
+        self.assertFalse(parsed[0]["forPatient"])
 
     def test_openrouter_request(self):
         client = AIClient()
+        client.enabled = True
         attempts = []
 
         def fake_post(url, **kwargs):

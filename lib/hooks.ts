@@ -788,6 +788,13 @@ export function useDeleteFile() {
 }
 
 /**
+ * Hook for extracting text from an uploaded notes document
+ */
+export function useExtractNotesFile() {
+  return useMutation((file: File) => aiAPI.extractNotesFile(file));
+}
+
+/**
  * Hook for submitting summarization task
  */
 export function useSummarizeNotes() {

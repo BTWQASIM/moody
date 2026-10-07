@@ -28,6 +28,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   usePatients,
   useAppointments,
+  useExtractNotesFile,
   useSummarizeNotes,
   useExtractActionItems,
   useGenerateProgressReport,
@@ -107,11 +108,12 @@ function TaskStatusIndicator({ status }: { status?: string }) {
   )
 }
 
-function renderSummaryMarkdown(summary: string) {
+function renderClinicalMarkdown(summary: string) {
   return summary.split(/\r?\n/).map((line, index) => {
     const key = `${index}-${line}`
-    const heading = line.match(/^\*\*(.+)\*\*$/)
+    const heading = line.match(/^#{1,4}\s+(.+)$/) || line.match(/^\*\*(.+)\*\*$/)
     const listItem = line.match(/^\s*(\d+)\.\s+(.+)$/)
+    const bulletItem = line.match(/^\s*[-*]\s+(.+)$/)
 
     if (!line.trim()) {
       return <div key={key} className="h-3" />
@@ -130,6 +132,15 @@ function renderSummaryMarkdown(summary: string) {
         <div key={key} className="flex gap-2 pl-1">
           <span className="font-medium text-muted-foreground">{listItem[1]}.</span>
           <span>{listItem[2]}</span>
+        </div>
+      )
+    }
+
+    if (bulletItem) {
+      return (
+        <div key={key} className="flex gap-2 pl-1">
+          <span className="font-medium text-primary">•</span>
+          <span>{bulletItem[1]}</span>
         </div>
       )
     }
@@ -162,6 +173,96 @@ function formatGeneratedAt(generatedAt: string) {
 
 function withoutSummaryHeading(summary: string) {
   return summary.replace(/^\s*\*\*Session Summary(?:\s*\([^*\n]+\))?\*\*\s*\n?/, "")
+}
+
+function NotesDocumentInput({
+  id,
+  label,
+  placeholder,
+  content,
+  onContentChange,
+}: {
+  id: string
+  label: string
+  placeholder: string
+  content: string
+  onContentChange: (value: string) => void
+}) {
+  const { execute, loading, error } = useExtractNotesFile()
+  const [filename, setFilename] = useState("")
+
+  const handleFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    try {
+      const result: any = await execute(file)
+      onContentChange(String(result.content || ""))
+      setFilename(String(result.filename || file.name))
+    } catch (err) {
+      console.error("Failed to extract notes document:", err)
+      setFilename("")
+    } finally {
+      event.target.value = ""
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="space-y-2">
+        <Label htmlFor={`${id}-file`}>Upload Notes</Label>
+        <Input
+          id={`${id}-file`}
+          type="file"
+          accept=".txt,.pdf,.docx,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          onChange={handleFile}
+          disabled={loading}
+        />
+        <p className="text-xs text-muted-foreground">
+          {loading
+            ? "Extracting text..."
+            : filename
+              ? `${filename} loaded. Review the extracted text below.`
+              : "TXT, PDF, or DOCX up to 5 MB. Scanned PDFs require OCR."}
+        </p>
+        {error && (
+          <Alert variant="destructive">
+            <AlertTriangle className="size-4" />
+            <AlertDescription>{error.message}</AlertDescription>
+          </Alert>
+        )}
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor={id}>{label}</Label>
+        <Textarea
+          id={id}
+          placeholder={placeholder}
+          value={content}
+          onChange={(event) => onContentChange(event.target.value)}
+          className="h-40 resize-y"
+        />
+        <p className="text-xs text-muted-foreground">
+          {content.length.toLocaleString()} characters • Review before submitting to AI
+        </p>
+      </div>
+    </div>
+  )
+}
+
+interface ActionItem {
+  title: string
+  forPatient: boolean
+  dueDate: string
+}
+
+function resolveActionItems(taskResult: any): ActionItem[] {
+  const items = taskResult?.result?.actionItems?.action_items
+  if (!Array.isArray(items)) return []
+  return items.filter(
+    (item): item is ActionItem =>
+      item && typeof item.title === "string" && typeof item.forPatient === "boolean",
+  )
 }
 
 // ============================================================================
@@ -241,7 +342,10 @@ function SummarizeNotesTab({ appointments, patients }: { appointments: Appointme
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="space-y-2">
           <Label htmlFor="appointment">Select Appointment *</Label>
-          <Select value={selectedAppointmentId} onValueChange={setSelectedAppointmentId}>
+          <Select
+            value={selectedAppointmentId}
+            onValueChange={(value) => setSelectedAppointmentId(value ?? "")}
+          >
             <SelectTrigger id="appointment">
               <SelectValue placeholder="Choose an appointment..." />
             </SelectTrigger>
@@ -255,19 +359,13 @@ function SummarizeNotesTab({ appointments, patients }: { appointments: Appointme
           </Select>
         </div>
 
-        <div className="space-y-2">
-          <Label htmlFor="content">Session Notes/Transcript *</Label>
-          <Textarea
-            id="content"
-            placeholder="Paste session notes, transcript, or key points..."
-            value={content}
-            onChange={(e) => setContent(e.target.value)}
-            className="h-32 resize-none"
-          />
-          <p className="text-xs text-muted-foreground">
-            {content.length} characters • AI will analyze and create a summary
-          </p>
-        </div>
+        <NotesDocumentInput
+          id="content"
+          label="Session Notes/Transcript *"
+          placeholder="Paste session notes, transcript, or key points..."
+          content={content}
+          onContentChange={setContent}
+        />
 
         <Button type="submit" disabled={loading} className="w-full">
           {loading ? (
@@ -302,7 +400,7 @@ function SummarizeNotesTab({ appointments, patients }: { appointments: Appointme
                   )}
                 </div>
                 <div className="space-y-2 leading-6 text-muted-foreground">
-                  {renderSummaryMarkdown(displaySummary)}
+                  {renderClinicalMarkdown(displaySummary)}
                 </div>
                 <Button
                   type="button"
@@ -340,6 +438,7 @@ function ExtractActionItemsTab({ appointments, patients }: { appointments: Appoi
 
   const { execute, loading } = useExtractActionItems()
   const { data: taskResult } = useTaskStatus(taskId)
+  const actionItems = resolveActionItems(taskResult)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -379,7 +478,10 @@ function ExtractActionItemsTab({ appointments, patients }: { appointments: Appoi
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="space-y-2">
           <Label htmlFor="action-apt">Select Appointment *</Label>
-          <Select value={selectedAppointmentId} onValueChange={setSelectedAppointmentId}>
+          <Select
+            value={selectedAppointmentId}
+            onValueChange={(value) => setSelectedAppointmentId(value ?? "")}
+          >
             <SelectTrigger id="action-apt">
               <SelectValue placeholder="Choose an appointment..." />
             </SelectTrigger>
@@ -393,19 +495,13 @@ function ExtractActionItemsTab({ appointments, patients }: { appointments: Appoi
           </Select>
         </div>
 
-        <div className="space-y-2">
-          <Label htmlFor="action-content">Session Content *</Label>
-          <Textarea
-            id="action-content"
-            placeholder="Paste session notes, goals discussed, or treatment plan..."
-            value={content}
-            onChange={(e) => setContent(e.target.value)}
-            className="h-32 resize-none"
-          />
-          <p className="text-xs text-muted-foreground">
-            {content.length} characters • AI will identify and extract action items
-          </p>
-        </div>
+        <NotesDocumentInput
+          id="action-content"
+          label="Session Content *"
+          placeholder="Paste session notes, goals discussed, or treatment plan..."
+          content={content}
+          onContentChange={setContent}
+        />
 
         <Button type="submit" disabled={loading} className="w-full">
           {loading ? (
@@ -429,11 +525,25 @@ function ExtractActionItemsTab({ appointments, patients }: { appointments: Appoi
               <span className="text-sm font-medium">Extraction Status</span>
               <TaskStatusIndicator status={(taskResult as any)?.status} />
             </div>
-            {(taskResult as any)?.result && (
-              <div className="rounded-lg bg-background p-4 text-sm space-y-2 max-h-96 overflow-y-auto">
-                <pre className="whitespace-pre-wrap break-words font-mono text-xs">
-                  {JSON.stringify((taskResult as any).result, null, 2)}
-                </pre>
+            {actionItems.length > 0 && (
+              <div className="rounded-lg bg-background p-4 text-sm space-y-3 max-h-96 overflow-y-auto">
+                <h3 className="font-semibold text-foreground">Recommended Action Items</h3>
+                {actionItems.map((item, index) => (
+                  <div key={`${item.title}-${index}`} className="rounded-md border p-3 space-y-2">
+                    <div className="flex items-start gap-2">
+                      <CheckCircle className="mt-0.5 size-4 shrink-0 text-green-600" />
+                      <p className="font-medium text-foreground">{item.title}</p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 pl-6">
+                      <Badge variant="secondary">
+                        {item.forPatient ? "Patient" : "Therapist"}
+                      </Badge>
+                      <span className="text-xs text-muted-foreground">
+                        Due: {item.dueDate || "Not specified"}
+                      </span>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
             {(taskResult as any)?.error && (
@@ -459,6 +569,11 @@ function GenerateProgressReportTab({ patients }: { patients: Patient[] }) {
 
   const { execute, loading } = useGenerateProgressReport()
   const { data: taskResult } = useTaskStatus(taskId)
+  const progressReport =
+    typeof (taskResult as any)?.result?.progressReport === "string"
+      ? (taskResult as any).result.progressReport
+      : null
+  const hasNoData = (taskResult as any)?.result?.status === "no_data"
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -485,7 +600,10 @@ function GenerateProgressReportTab({ patients }: { patients: Patient[] }) {
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="space-y-2">
           <Label htmlFor="report-patient">Select Patient *</Label>
-          <Select value={selectedPatientId} onValueChange={setSelectedPatientId}>
+          <Select
+            value={selectedPatientId}
+            onValueChange={(value) => setSelectedPatientId(value ?? "")}
+          >
             <SelectTrigger id="report-patient">
               <SelectValue placeholder="Choose a patient..." />
             </SelectTrigger>
@@ -526,12 +644,23 @@ function GenerateProgressReportTab({ patients }: { patients: Patient[] }) {
               <span className="text-sm font-medium">Report Generation Status</span>
               <TaskStatusIndicator status={(taskResult as any)?.status} />
             </div>
-            {(taskResult as any)?.result && (
-              <div className="rounded-lg bg-background p-4 text-sm space-y-2 max-h-96 overflow-y-auto">
-                <pre className="whitespace-pre-wrap break-words font-mono text-xs">
-                  {JSON.stringify((taskResult as any).result, null, 2)}
-                </pre>
+            {progressReport && (
+              <div className="rounded-lg bg-background p-5 text-sm max-h-96 overflow-y-auto">
+                <h3 className="mb-4 border-b pb-3 text-base font-semibold text-foreground">
+                  Clinical Progress Report
+                </h3>
+                <div className="space-y-2 leading-6 text-muted-foreground">
+                  {renderClinicalMarkdown(progressReport)}
+                </div>
               </div>
+            )}
+            {hasNoData && (
+              <Alert>
+                <AlertTriangle className="size-4" />
+                <AlertDescription>
+                  No mood check-ins, journals, or generated clinical summaries are available for this patient yet.
+                </AlertDescription>
+              </Alert>
             )}
             {(taskResult as any)?.error && (
               <Alert variant="destructive">

@@ -1,0 +1,23 @@
+SYNTHETIC TEST DATA — NOT A REAL PATIENT RECORD
+
+Patient profile for testing:
+Primary goal: Reduce panic symptoms and resume independent travel to university.
+
+Session 1 — 2026-09-01
+The patient reported three panic episodes during the previous week and avoided buses entirely. Baseline anxiety when imagining bus travel was 9/10. Psychoeducation about the panic cycle was provided. The patient agreed to practise slow breathing once per day and stand at a bus stop for five minutes with a family member.
+
+Session 2 — 2026-09-15
+The patient completed four bus-stop exposures. Anxiety began at 8/10 and reduced to 5/10 without leaving early. There were two panic episodes during the two-week period. The patient identified caffeine and lack of sleep as common contributing factors. The plan was to reduce evening caffeine and take one short bus ride with a family member.
+
+Session 3 — 2026-09-29
+The patient completed two short accompanied bus rides. Peak anxiety was 7/10 and reduced to 3/10 by the end of each ride. One panic episode occurred during the two-week period. The patient reported improved confidence and fewer missed classes. The next exposure goal was a short bus ride alone during a quiet time of day.
+
+Session 4 — 2026-10-06
+The patient completed one independent bus ride and attended all scheduled classes that week. Anticipatory anxiety was 6/10, peaked at 7/10, and reduced to 3/10. No panic episodes occurred during the week. Sleep remained inconsistent, averaging six hours per night. Treatment will continue with graded exposure, sleep routine work, and relapse-prevention planning.
+
+Overall test trend:
+- Panic episodes reduced from three per week to zero in the most recent week.
+- Avoidance reduced from complete bus avoidance to one independent journey.
+- University attendance improved.
+- Sleep regularity remains an area requiring attention.
+- No suicidal ideation, self-harm, or violence risk was reported in any session.

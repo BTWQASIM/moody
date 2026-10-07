@@ -40,7 +40,11 @@ services:
     plan: free
     rootDir: backend
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    # Run one low-concurrency AI worker inside the existing API service so a
+    # separate paid Render background-worker service is not required.
+    startCommand: >-
+      sh -c 'celery -A app.tasks:celery_app worker --loglevel=INFO --pool=solo --concurrency=1
+      & exec uvicorn app.main:app --host 0.0.0.0 --port $PORT'
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.11"
@@ -53,6 +57,14 @@ services:
         sync: false
       # Comma-separated allowed frontend origins, e.g. https://pingmytherapist-web.onrender.com
       - key: CORS_ORIGINS
+        sync: false
+      - key: PUBLIC_API_URL
+        value: https://pingmytherapist-api.onrender.com
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: CELERY_BROKER_URL
+        sync: false
+      - key: CELERY_RESULT_BACKEND
         sync: false
       - key: ADMIN_BOOTSTRAP_ENABLED
         value: "false"
