@@ -6,6 +6,7 @@ Handles profile photos, documents, recordings, and exports
 from io import BytesIO
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 from fastapi import (
     APIRouter,
     File,
@@ -17,8 +18,8 @@ from fastapi import (
     UploadFile,
     status,
 )
-from firebase_admin import auth as firebase_auth, storage
-from datetime import datetime, timedelta
+from firebase_admin import auth as firebase_auth, firestore, storage
+from datetime import datetime
 import os
 import re
 import secrets
@@ -36,6 +37,10 @@ LOCAL_UPLOADS_URL_BASE = os.getenv(
 PROFILE_PHOTO_SIZE = (512, 512)
 PROFILE_PHOTO_MAX_BYTES = 700 * 1024
 PROFILE_PHOTO_MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+ALLOW_LOCAL_UPLOAD_FALLBACK = os.getenv(
+    "ALLOW_LOCAL_UPLOAD_FALLBACK",
+    "false" if os.getenv("RENDER") else "true",
+).lower() in {"1", "true", "yes"}
 
 
 def verify_token(authorization: str = Header(...)):
@@ -67,22 +72,6 @@ def get_bucket():
         )
 
 
-def generate_signed_url(bucket_name: str, blob_name: str) -> str:
-    """Generate a signed URL for a file (valid for 1 hour)"""
-    try:
-        bucket = get_bucket()
-        blob = bucket.blob(blob_name)
-        url = blob.generate_signed_url(
-            version="v4",
-            expiration=timedelta(hours=1),
-            method="GET"
-        )
-        return url
-    except Exception:
-        # Fallback: return public URL if signing fails
-        return f"https://storage.googleapis.com/{bucket_name}/{blob_name}"
-
-
 def sanitize_segment(value: str) -> str:
     cleaned = re.sub(r"[^a-zA-Z0-9_.-]", "_", value)
     return cleaned or "file"
@@ -107,11 +96,61 @@ def upload_to_storage_or_local(file_path: str, contents: bytes, content_type: st
     try:
         bucket = get_bucket()
         blob = bucket.blob(file_path)
+        download_token = secrets.token_urlsafe(32)
+        blob.metadata = {"firebaseStorageDownloadTokens": download_token}
         blob.upload_from_string(contents, content_type=content_type)
-        return generate_signed_url(bucket.name, file_path)
-    except Exception:
-        # Firebase Storage may be unavailable in local development.
+        blob.patch()
+        encoded_path = quote(file_path, safe="")
+        encoded_token = quote(download_token, safe="")
+        return (
+            f"https://firebasestorage.googleapis.com/v0/b/{bucket.name}/o/"
+            f"{encoded_path}?alt=media&token={encoded_token}"
+        )
+    except Exception as err:
+        if not ALLOW_LOCAL_UPLOAD_FALLBACK:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Persistent file storage is unavailable; the upload was not saved",
+            ) from err
+        # Local disk is an explicit development-only fallback.
         return local_upload(file_path, contents)
+
+
+def persist_uploaded_file(
+    *,
+    owner_uid: str,
+    category: str,
+    file_path: str,
+    file_url: str,
+    original_name: str,
+    content_type: str,
+    size: int,
+    patient_id: Optional[str] = None,
+    appointment_id: Optional[str] = None,
+) -> str:
+    """Persist searchable metadata for every non-profile file upload."""
+    if not db.db:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Firestore is not configured",
+        )
+    ref = db.db.collection("uploadedFiles").document()
+    ref.set(
+        {
+            "id": ref.id,
+            "ownerUid": owner_uid,
+            "category": category,
+            "filePath": file_path,
+            "fileUrl": file_url,
+            "originalName": original_name,
+            "contentType": content_type,
+            "size": size,
+            "patientId": patient_id,
+            "appointmentId": appointment_id,
+            "createdAt": firestore.SERVER_TIMESTAMP,
+        }
+    )
+    return ref.id
 
 
 def normalize_profile_photo(contents: bytes) -> bytes:
@@ -283,6 +322,11 @@ async def upload_document(
 
     try:
         contents = await file.read()
+        if len(contents) > 10 * 1024 * 1024:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="File too large (max 10MB)",
+            )
         ext = file.filename.split(".")[-1] if file.filename else "pdf"
         ext = sanitize_segment(ext.lower())
         file_path = (
@@ -294,6 +338,15 @@ async def upload_document(
             contents,
             file.content_type or "application/octet-stream",
         )
+        file_record_id = persist_uploaded_file(
+            owner_uid=user_id,
+            category="document",
+            file_path=file_path,
+            file_url=file_url,
+            original_name=file.filename or f"document.{ext}",
+            content_type=file.content_type or "application/octet-stream",
+            size=len(contents),
+        )
 
         return {
             "status": "success",
@@ -301,6 +354,7 @@ async def upload_document(
             "fileUrl": file_url,
             "filePath": file_path,
             "documentType": documentType,
+            "fileRecordId": file_record_id,
         }
     except HTTPException:
         raise
@@ -350,6 +404,11 @@ async def upload_audio_recording(
 
     try:
         contents = await file.read()
+        if len(contents) > 100 * 1024 * 1024:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="File too large (max 100MB)",
+            )
         ext = file.filename.split(".")[-1] if file.filename else "m4a"
         ext = sanitize_segment(ext.lower())
         file_path = (
@@ -357,12 +416,23 @@ async def upload_audio_recording(
             f"{sanitize_segment(sessionDate)}/{datetime.utcnow().timestamp()}-{secrets.token_hex(4)}.{ext}"
         )
         file_url = upload_to_storage_or_local(file_path, contents, file.content_type)
+        file_record_id = persist_uploaded_file(
+            owner_uid=therapist_uid,
+            category="audio_recording",
+            file_path=file_path,
+            file_url=file_url,
+            original_name=file.filename or f"recording.{ext}",
+            content_type=file.content_type,
+            size=len(contents),
+            patient_id=patientId,
+        )
 
         return {
             "status": "success",
             "message": "Recording uploaded",
             "fileUrl": file_url,
             "filePath": file_path,
+            "fileRecordId": file_record_id,
         }
     except HTTPException:
         raise
@@ -405,6 +475,11 @@ async def upload_session_export(
 
     try:
         contents = await file.read()
+        if len(contents) > 50 * 1024 * 1024:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="File too large (max 50MB)",
+            )
         ext = file.filename.split(".")[-1] if file.filename else "pdf"
         ext = sanitize_segment(ext.lower())
         file_path = (
@@ -416,15 +491,34 @@ async def upload_session_export(
             contents,
             file.content_type or "application/octet-stream",
         )
+        file_record_id = persist_uploaded_file(
+            owner_uid=therapist_uid,
+            category="session_export",
+            file_path=file_path,
+            file_url=file_url,
+            original_name=file.filename or f"session-export.{ext}",
+            content_type=file.content_type or "application/octet-stream",
+            size=len(contents),
+            appointment_id=appointmentId,
+        )
 
-        # Update appointment with export URL
-        db.update_appointment(appointmentId, {"sessionNotes": file_url})
+        # Keep clinical notes intact and store export metadata in dedicated fields.
+        db.update_appointment(
+            appointmentId,
+            {
+                "sessionExportUrl": file_url,
+                "sessionExportPath": file_path,
+                "sessionExportFileId": file_record_id,
+                "sessionExportedAt": datetime.utcnow(),
+            },
+        )
 
         return {
             "status": "success",
             "message": "Session exported and uploaded",
             "fileUrl": file_url,
             "filePath": file_path,
+            "fileRecordId": file_record_id,
         }
     except HTTPException:
         raise

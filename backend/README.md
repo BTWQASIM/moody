@@ -57,6 +57,32 @@ python scripts/seed_therapists.py
 python scripts/bootstrap_admin.py --email admin@example.com
 ```
 
+### Brock portal demo data
+
+`seed_portal_demo.py` adds a deterministic, therapist-scoped demonstration dataset
+for the existing `brocklesnar@moodie.com` account. It creates dedicated demo
+patient Firebase Auth accounts so seeded appointments are visible in the mobile
+app. It never changes the therapist's password or claims. Dry-run is the default:
+
+```bash
+# Verify the therapist and preview collection counts; performs no writes
+python scripts/seed_portal_demo.py
+
+# Upsert the tagged demo records after reviewing the dry run
+python scripts/seed_portal_demo.py --apply
+
+# Optionally choose the shared demo-patient login password
+python scripts/seed_portal_demo.py --apply --patient-password 'StrongDemoPassword!'
+
+# Remove only records that still carry this seed's tag
+python scripts/seed_portal_demo.py --cleanup --apply
+```
+
+The apply command prints the demo patient emails and shared password. The
+deterministic records can be refreshed safely by running `--apply` again.
+Existing untagged portal data is left untouched. Cleanup preserves the tagged
+demo login profiles so they can be reused safely.
+
 ## Key API areas
 
 | Prefix | Purpose |
@@ -80,6 +106,15 @@ Optional:
 - `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` — AI background tasks
 - `GEMINI_API_KEY` — AI features
 - `ADMIN_BOOTSTRAP_ENABLED` / `ADMIN_BOOTSTRAP_SECRET` — one-time admin creation
+- `PATIENT_DATA_ENCRYPTION_KEY` — base64-encoded 32-byte AES key used to encrypt
+  `patients.clinicalNotes` before Firestore writes. Generate one with
+  `openssl rand -base64 32`. Keep the same key across deploys and backups;
+  losing it makes encrypted notes unrecoverable.
+
+Patient profile notes use versioned AES-256-GCM encryption when this key is
+configured. The API decrypts them transparently for authorized therapists, so
+the frontend contract does not change. Existing plaintext notes remain readable
+and are encrypted the next time they are edited.
 
 ## Do not commit
 

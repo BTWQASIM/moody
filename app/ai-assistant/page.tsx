@@ -61,6 +61,8 @@ interface Patient {
   lastName?: string
   name?: string
   email?: string
+  lastProgressReport?: string
+  progressReportGeneratedAt?: string
 }
 
 interface Appointment {
@@ -70,6 +72,11 @@ interface Appointment {
   patientName?: string
   scheduledAt?: string
   type?: string
+  sessionSummary?: string
+  summarizedAt?: string
+  generatedAt?: string
+  actionItems?: unknown
+  actionItemsExtractedAt?: string
 }
 
 interface MoodEntry {
@@ -285,14 +292,16 @@ function SummarizeNotesTab({ appointments, patients }: { appointments: Appointme
 
   const { execute, loading } = useSummarizeNotes()
   const { data: taskResult } = useTaskStatus(taskId)
+  const selectedAppointment = appointments.find((item) => item.id === selectedAppointmentId)
+  const persistedSummary = selectedAppointment?.sessionSummary?.trim() || null
   const summary =
     typeof (taskResult as any)?.result?.summary === "string"
       ? (taskResult as any).result.summary
-      : null
+      : persistedSummary
   const generatedAt =
     typeof (taskResult as any)?.result?.generatedAt === "string"
       ? (taskResult as any).result.generatedAt
-      : null
+      : selectedAppointment?.summarizedAt || selectedAppointment?.generatedAt || null
   const displaySummary = summary ? withoutSummaryHeading(summary) : null
 
   const downloadSummary = () => {
@@ -353,7 +362,10 @@ function SummarizeNotesTab({ appointments, patients }: { appointments: Appointme
           <Label htmlFor="appointment">Select Appointment *</Label>
           <Select
             value={selectedAppointmentId}
-            onValueChange={(value) => setSelectedAppointmentId(value ?? "")}
+            onValueChange={(value) => {
+              setSelectedAppointmentId(value ?? "")
+              setTaskId(null)
+            }}
           >
             <SelectTrigger id="appointment">
               <SelectValue placeholder="Choose an appointment..." />
@@ -391,12 +403,16 @@ function SummarizeNotesTab({ appointments, patients }: { appointments: Appointme
         </Button>
       </form>
 
-      {taskId && (
+      {(taskId || displaySummary) && (
         <Card className="bg-muted/50">
           <CardContent className="pt-6 space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-sm font-medium">Task Status</span>
-              <TaskStatusIndicator status={(taskResult as any)?.status} />
+              <span className="text-sm font-medium">{taskId ? "Task Status" : "Saved Result"}</span>
+              {taskId ? (
+                <TaskStatusIndicator status={(taskResult as any)?.status} />
+              ) : (
+                <Badge variant="secondary">Persisted</Badge>
+              )}
             </div>
             {displaySummary && (
               <div className="rounded-lg bg-background p-5 text-sm max-h-96 overflow-y-auto">
@@ -447,7 +463,12 @@ function ExtractActionItemsTab({ appointments, patients }: { appointments: Appoi
 
   const { execute, loading } = useExtractActionItems()
   const { data: taskResult } = useTaskStatus(taskId)
-  const actionItems = resolveActionItems(taskResult)
+  const selectedAppointment = appointments.find((item) => item.id === selectedAppointmentId)
+  const liveActionItems = resolveActionItems(taskResult)
+  const persistedActionItems = resolveActionItems({
+    result: { actionItems: selectedAppointment?.actionItems },
+  })
+  const actionItems = liveActionItems.length > 0 ? liveActionItems : persistedActionItems
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -489,7 +510,10 @@ function ExtractActionItemsTab({ appointments, patients }: { appointments: Appoi
           <Label htmlFor="action-apt">Select Appointment *</Label>
           <Select
             value={selectedAppointmentId}
-            onValueChange={(value) => setSelectedAppointmentId(value ?? "")}
+            onValueChange={(value) => {
+              setSelectedAppointmentId(value ?? "")
+              setTaskId(null)
+            }}
           >
             <SelectTrigger id="action-apt">
               <SelectValue placeholder="Choose an appointment..." />
@@ -527,12 +551,16 @@ function ExtractActionItemsTab({ appointments, patients }: { appointments: Appoi
         </Button>
       </form>
 
-      {taskId && (
+      {(taskId || actionItems.length > 0) && (
         <Card className="bg-muted/50">
           <CardContent className="pt-6 space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-sm font-medium">Extraction Status</span>
-              <TaskStatusIndicator status={(taskResult as any)?.status} />
+              <span className="text-sm font-medium">{taskId ? "Extraction Status" : "Saved Result"}</span>
+              {taskId ? (
+                <TaskStatusIndicator status={(taskResult as any)?.status} />
+              ) : (
+                <Badge variant="secondary">Persisted</Badge>
+              )}
             </div>
             {actionItems.length > 0 && (
               <div className="rounded-lg bg-background p-4 text-sm space-y-3 max-h-96 overflow-y-auto">
@@ -578,10 +606,12 @@ function GenerateProgressReportTab({ patients }: { patients: Patient[] }) {
 
   const { execute, loading } = useGenerateProgressReport()
   const { data: taskResult } = useTaskStatus(taskId)
+  const selectedPatientRecord = patients.find((patient) => patient.id === selectedPatientId)
+  const persistedProgressReport = selectedPatientRecord?.lastProgressReport?.trim() || null
   const progressReport =
     typeof (taskResult as any)?.result?.progressReport === "string"
       ? (taskResult as any).result.progressReport
-      : null
+      : persistedProgressReport
   const hasNoData = (taskResult as any)?.result?.status === "no_data"
   const dataCoverage = ((taskResult as any)?.result?.dataCoverage || {}) as Record<string, number>
   const dataQuality = (taskResult as any)?.result?.dataQuality as string | undefined
@@ -615,7 +645,10 @@ function GenerateProgressReportTab({ patients }: { patients: Patient[] }) {
           <Label htmlFor="report-patient">Select Patient *</Label>
           <Select
             value={selectedPatientId}
-            onValueChange={(value) => setSelectedPatientId(value ?? "")}
+            onValueChange={(value) => {
+              setSelectedPatientId(value ?? "")
+              setTaskId(null)
+            }}
           >
             <SelectTrigger id="report-patient">
               <span className={cn("flex-1 text-left", !selectedPatient && "text-muted-foreground")}>
@@ -651,12 +684,16 @@ function GenerateProgressReportTab({ patients }: { patients: Patient[] }) {
         </Button>
       </form>
 
-      {taskId && (
+      {(taskId || progressReport) && (
         <Card className="bg-muted/50">
           <CardContent className="pt-6 space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-sm font-medium">Report Generation Status</span>
-              <TaskStatusIndicator status={(taskResult as any)?.status} />
+              <span className="text-sm font-medium">{taskId ? "Report Generation Status" : "Saved Report"}</span>
+              {taskId ? (
+                <TaskStatusIndicator status={(taskResult as any)?.status} />
+              ) : (
+                <Badge variant="secondary">Persisted</Badge>
+              )}
             </div>
             {progressReport && (
               <div className="rounded-lg bg-background p-5 text-sm max-h-96 overflow-y-auto">

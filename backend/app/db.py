@@ -7,6 +7,7 @@ from typing import List, Optional, Any, Dict, Iterable, cast
 from datetime import datetime
 from firebase_admin import firestore
 from app.firebase import get_db_client
+from app.field_encryption import PatientFieldEncryption
 from app.models import (
     TherapistProfile,
     PatientProfile,
@@ -30,6 +31,25 @@ class FirestoreDAO:
 
     def __init__(self):
         self.db = get_db_client()
+        self._patient_field_encryption = PatientFieldEncryption.from_environment()
+
+    def _protect_patient_fields(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Encrypt configured patient fields before a Firestore write."""
+        protected = dict(data)
+        if "clinicalNotes" in protected:
+            protected["clinicalNotes"] = self._patient_field_encryption.encrypt_notes(
+                protected["clinicalNotes"]
+            )
+        return protected
+
+    def _reveal_patient_fields(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Decrypt configured patient fields after a Firestore read."""
+        revealed = dict(data)
+        if "clinicalNotes" in revealed:
+            revealed["clinicalNotes"] = self._patient_field_encryption.decrypt_notes(
+                revealed["clinicalNotes"]
+            )
+        return revealed
 
     def _doc_data(self, doc: Any) -> Optional[Dict[str, Any]]:
         """Normalize Firestore snapshot access for static typing and runtime safety."""
@@ -140,7 +160,7 @@ class FirestoreDAO:
                 continue
             if data.get("firebaseUid") == firebase_uid:
                 data["id"] = cast(Any, doc).id
-                return data
+                return self._reveal_patient_fields(data)
         return None
 
     def ensure_patient_from_mobile_appointment(
@@ -223,7 +243,8 @@ class FirestoreDAO:
         data = self._doc_data(doc)
         if data is not None:
             data["id"] = patient_id
-        return data
+            return self._reveal_patient_fields(data)
+        return None
 
     def get_patients_for_therapist(self, therapist_uid: str) -> List[Dict[str, Any]]:
         """Get all patients for a therapist"""
@@ -240,7 +261,7 @@ class FirestoreDAO:
             if not isinstance(data, dict):
                 continue
             data["id"] = cast(Any, doc).id
-            rows.append(data)
+            rows.append(self._reveal_patient_fields(data))
         rows.sort(
             key=lambda patient: (
                 str(patient.get("lastName", "")).lower(),
@@ -253,9 +274,10 @@ class FirestoreDAO:
         """Create a new patient profile"""
         if not self.db:
             raise Exception("Firestore not configured")
-        doc_ref = self.db.collection("patients").add(
+        payload = self._protect_patient_fields(
             profile.model_dump(mode="json", by_alias=False)
         )
+        doc_ref = self.db.collection("patients").add(payload)
         patient_id = doc_ref[1].id
         doc_ref[1].update({"id": patient_id})
         return patient_id
@@ -264,8 +286,9 @@ class FirestoreDAO:
         """Update patient profile"""
         if not self.db:
             return False
-        updates["updatedAt"] = datetime.utcnow()
-        self.db.collection("patients").document(patient_id).update(updates)
+        protected_updates = self._protect_patient_fields(updates)
+        protected_updates["updatedAt"] = datetime.utcnow()
+        self.db.collection("patients").document(patient_id).update(protected_updates)
         return True
 
     def delete_patient(self, patient_id: str) -> bool:

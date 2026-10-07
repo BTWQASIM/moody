@@ -770,15 +770,28 @@ async def update_my_profile(
         for key, value in request.model_dump().items()
         if value is not None
     }
+    if "email" in updates:
+        updates["email"] = updates["email"].strip().lower()
     if "availability" in updates:
         updates["availability"] = _normalize_availability(updates["availability"])
     updates["updatedAt"] = datetime.utcnow().isoformat()
     is_admin = _is_admin(decoded, db_client)
     target_collection = "admins" if is_admin else "therapists"
 
+    previous_auth_user = None
+    should_update_auth = bool(request.name or request.email)
+    auth_was_updated = False
+
     try:
-        if request.name:
-            auth_client.update_user(uid, display_name=request.name)
+        if should_update_auth:
+            previous_auth_user = auth_client.get_user(uid)
+            auth_updates = {}
+            if request.name:
+                auth_updates["display_name"] = request.name
+            if request.email:
+                auth_updates["email"] = updates["email"]
+            auth_client.update_user(uid, **auth_updates)
+            auth_was_updated = True
 
         ref = db_client.collection(target_collection).document(uid)
         existing = ref.get()
@@ -796,6 +809,18 @@ async def update_my_profile(
             "message": "Profile updated successfully",
         }
     except Exception as err:
+        # Avoid leaving Firebase Auth and the portal profile out of sync if the
+        # Firestore write fails after the identity record was updated.
+        if auth_was_updated and previous_auth_user is not None:
+            try:
+                rollback = {}
+                if request.name:
+                    rollback["display_name"] = previous_auth_user.display_name
+                if request.email:
+                    rollback["email"] = previous_auth_user.email
+                auth_client.update_user(uid, **rollback)
+            except Exception:
+                pass
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to update profile: {str(err)}",

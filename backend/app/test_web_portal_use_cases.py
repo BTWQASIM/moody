@@ -106,6 +106,104 @@ class AuthenticationAndProfileTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(raised.exception.status_code, 403)
 
+    async def test_profile_email_is_persisted_in_auth_and_firestore(self):
+        admin_snapshot = Mock(exists=False)
+        therapist_snapshot = Mock(exists=True)
+        therapist_snapshot.to_dict.return_value = {
+            "verified": True,
+            "status": "verified",
+        }
+        therapist_ref = Mock()
+        therapist_ref.get.return_value = therapist_snapshot
+        admin_ref = Mock()
+        admin_ref.get.return_value = admin_snapshot
+        db_client = Mock()
+        db_client.collection.side_effect = lambda name: Mock(
+            document=Mock(
+                return_value=admin_ref if name == "admins" else therapist_ref
+            )
+        )
+        auth_client = Mock()
+        auth_client.get_user.return_value = Mock(
+            display_name="Old Name", email="old@moodie.com"
+        )
+
+        with (
+            patch.object(
+                auth,
+                "verify_token",
+                return_value={"uid": "therapist-1", "role": "therapist", "verified": True},
+            ),
+            patch.object(auth, "get_auth_client", return_value=auth_client),
+            patch.object(auth, "get_db_client", return_value=db_client),
+            patch("app.api.security.get_db_client", return_value=db_client),
+        ):
+            result = await auth.update_my_profile(
+                auth.UpdateProfileRequest(
+                    name="Dr New Name", email="  NEW@MOODIE.COM "
+                ),
+                "Bearer token",
+            )
+
+        auth_client.update_user.assert_called_once_with(
+            "therapist-1",
+            display_name="Dr New Name",
+            email="new@moodie.com",
+        )
+        saved = therapist_ref.set.call_args.args[0]
+        self.assertEqual(saved["email"], "new@moodie.com")
+        self.assertEqual(saved["name"], "Dr New Name")
+        self.assertEqual(result["status"], "success")
+
+    async def test_profile_identity_rolls_back_if_firestore_write_fails(self):
+        admin_snapshot = Mock(exists=False)
+        therapist_snapshot = Mock(exists=True)
+        therapist_snapshot.to_dict.return_value = {
+            "verified": True,
+            "status": "verified",
+        }
+        therapist_ref = Mock()
+        therapist_ref.get.return_value = therapist_snapshot
+        therapist_ref.set.side_effect = RuntimeError("Firestore unavailable")
+        admin_ref = Mock()
+        admin_ref.get.return_value = admin_snapshot
+        db_client = Mock()
+        db_client.collection.side_effect = lambda name: Mock(
+            document=Mock(
+                return_value=admin_ref if name == "admins" else therapist_ref
+            )
+        )
+        auth_client = Mock()
+        auth_client.get_user.return_value = Mock(
+            display_name="Old Name", email="old@moodie.com"
+        )
+
+        with (
+            patch.object(
+                auth,
+                "verify_token",
+                return_value={"uid": "therapist-1", "role": "therapist", "verified": True},
+            ),
+            patch.object(auth, "get_auth_client", return_value=auth_client),
+            patch.object(auth, "get_db_client", return_value=db_client),
+            patch("app.api.security.get_db_client", return_value=db_client),
+            self.assertRaises(HTTPException) as raised,
+        ):
+            await auth.update_my_profile(
+                auth.UpdateProfileRequest(
+                    name="Dr New Name", email="new@moodie.com"
+                ),
+                "Bearer token",
+            )
+
+        self.assertEqual(raised.exception.status_code, 500)
+        self.assertEqual(auth_client.update_user.call_count, 2)
+        auth_client.update_user.assert_any_call(
+            "therapist-1",
+            display_name="Old Name",
+            email="old@moodie.com",
+        )
+
 
 class PatientUseCaseTests(unittest.IsolatedAsyncioTestCase):
     async def test_create_patient_keeps_service_unavailable_error(self):
