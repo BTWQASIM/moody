@@ -5,7 +5,7 @@ Services management API endpoints
 from typing import Optional
 from fastapi import APIRouter, HTTPException, status, Header
 from firebase_admin import auth as firebase_auth
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models import ServiceOffering
 from app.db import FirestoreDAO
@@ -16,8 +16,10 @@ db = FirestoreDAO()
 
 
 class ServiceRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     name: str = Field(min_length=1)
-    description: str
+    description: str = Field(min_length=1)
     duration: int = Field(gt=0)  # minutes
     price: float = Field(ge=0)
     specialization: Optional[str] = None

@@ -13,7 +13,10 @@ _PASSWORD_RULES: List[tuple[str, re.Pattern[str]]] = [
     ("one lowercase letter (a–z)", re.compile(r"[a-z]")),
     ("one number (0–9)", re.compile(r"\d")),
     ("one special character", re.compile(r"[^A-Za-z0-9]")),
+    ("no spaces", re.compile(r"^\S+$")),
 ]
+
+_COMMON_PASSWORD_TERMS = ("password", "qwerty", "letmein", "welcome", "admin")
 
 
 def validate_password(password: str) -> List[str]:
@@ -21,7 +24,11 @@ def validate_password(password: str) -> List[str]:
     if not password:
         return [rule[0] for rule in _PASSWORD_RULES]
 
-    return [label for label, pattern in _PASSWORD_RULES if not pattern.search(password)]
+    missing = [label for label, pattern in _PASSWORD_RULES if not pattern.search(password)]
+    lowered = password.lower()
+    if any(term in lowered for term in _COMMON_PASSWORD_TERMS):
+        missing.append("no common password words")
+    return missing
 
 
 def password_validation_error(password: str) -> str | None:

@@ -1,5 +1,7 @@
 export const PASSWORD_MIN_LENGTH = 8
 
+const COMMON_PASSWORD_TERMS = ["password", "qwerty", "letmein", "welcome", "admin"]
+
 export type PasswordRequirement = {
   id: string
   label: string
@@ -31,6 +33,19 @@ export const PASSWORD_REQUIREMENTS: PasswordRequirement[] = [
     id: "special",
     label: "One special character (!@#$…)",
     test: (password) => /[^A-Za-z0-9]/.test(password),
+  },
+  {
+    id: "spaces",
+    label: "No spaces",
+    test: (password) => !/\s/.test(password),
+  },
+  {
+    id: "common",
+    label: "No common password words",
+    test: (password) => {
+      const normalized = password.toLowerCase()
+      return !COMMON_PASSWORD_TERMS.some((term) => normalized.includes(term))
+    },
   },
 ]
 

@@ -441,8 +441,10 @@ async def delete_file(file_path: str, authorization: str = Header(...)):
     decoded = verify_token(authorization)
     user_id = decoded.get("uid")
 
-    # Verify user owns the file (basic check: file path contains user_id)
-    if user_id not in file_path:
+    # Upload paths store the owner UID as its own segment. Substring matching
+    # would let a short UID match another user's longer directory name.
+    path_segments = Path(file_path).parts
+    if not user_id or user_id not in path_segments:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to delete this file",

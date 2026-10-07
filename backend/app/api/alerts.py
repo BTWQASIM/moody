@@ -5,7 +5,7 @@ Risk alerts API endpoints
 from typing import Optional
 from fastapi import APIRouter, HTTPException, status, Header
 from firebase_admin import auth as firebase_auth
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime
 
 from app.models import RiskAlert, RiskLevel
@@ -17,9 +17,11 @@ db = FirestoreDAO()
 
 
 class RiskAlertRequest(BaseModel):
-    patientId: str
-    title: str
-    description: str
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    patientId: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    description: str = Field(min_length=1)
     riskLevel: RiskLevel
 
 

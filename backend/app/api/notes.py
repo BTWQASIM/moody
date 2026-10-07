@@ -5,7 +5,7 @@ Clinical notes API endpoints
 from typing import Optional
 from fastapi import APIRouter, HTTPException, status, Header
 from firebase_admin import auth as firebase_auth
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime
 
 from app.models import ClinicalNote
@@ -17,11 +17,13 @@ db = FirestoreDAO()
 
 
 class ClinicalNoteRequest(BaseModel):
-    patientId: str
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    patientId: str = Field(min_length=1)
     appointmentId: Optional[str] = None
-    content: str
+    content: str = Field(min_length=1)
     confidential: bool = True
-    tags: list = []
+    tags: list = Field(default_factory=list)
 
 
 def verify_token(authorization: str = Header(...)):

@@ -5,7 +5,7 @@ Mood entries and tracking API endpoints
 from typing import Optional
 from fastapi import APIRouter, HTTPException, status, Header, Query
 from firebase_admin import auth as firebase_auth
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime
 
 from app.models import MoodEntry, MoodEntryStatus, RiskLevel
@@ -17,11 +17,13 @@ db = FirestoreDAO()
 
 
 class MoodEntryRequest(BaseModel):
-    patientId: str
-    moodScore: int  # 1-10
-    emotionalState: str
-    triggers: list = []
-    symptoms: list = []
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    patientId: str = Field(min_length=1)
+    moodScore: int = Field(ge=1, le=10)
+    emotionalState: str = Field(min_length=1)
+    triggers: list = Field(default_factory=list)
+    symptoms: list = Field(default_factory=list)
     notes: str = ""
 
 

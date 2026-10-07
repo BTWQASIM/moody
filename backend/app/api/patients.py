@@ -5,7 +5,7 @@ Patient management API endpoints
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, status, Header
 from firebase_admin import auth as firebase_auth
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime
 
 from app.models import PatientProfile, PatientContactInfo, PatientStatus, RiskLevel
@@ -18,9 +18,11 @@ db = FirestoreDAO()
 
 
 class PatientRequest(BaseModel):
-    firstName: str
-    lastName: str
-    email: str
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    firstName: str = Field(min_length=1)
+    lastName: str = Field(min_length=1)
+    email: str = Field(min_length=1)
     # Everything below is optional for the quick-add form; can be filled in
     # later via the patient profile edit flow.
     phone: Optional[str] = ""
@@ -178,6 +180,8 @@ async def create_patient(
             "message": "Patient created successfully",
             "patientId": patient_id,
         }
+    except HTTPException:
+        raise
     except Exception as err:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

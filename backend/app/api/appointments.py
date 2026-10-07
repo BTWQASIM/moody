@@ -6,7 +6,7 @@ from typing import Optional
 import asyncio
 from fastapi import APIRouter, HTTPException, status, Header, Query
 from firebase_admin import auth as firebase_auth
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime
 
 from app.models import AppointmentDetails, AppointmentStatus
@@ -18,10 +18,12 @@ db = FirestoreDAO()
 
 
 class AppointmentRequest(BaseModel):
-    patientId: str
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    patientId: str = Field(min_length=1)
     scheduledAt: datetime
-    duration: int  # minutes
-    type: str = "individual"  # individual, couples, group
+    duration: int = Field(gt=0)  # minutes
+    type: str = Field(default="individual", min_length=1)  # individual, couples, group
     notes: Optional[str] = None
 
 

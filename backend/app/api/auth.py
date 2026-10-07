@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from firebase_admin import auth as firebase_auth, firestore
 from app.firebase import get_auth_client, get_db_client
 from app.password_policy import password_validation_error
+from app.api.security import require_portal_user
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -753,6 +754,7 @@ async def update_my_profile(
 ):
     """Update logged-in therapist profile using backend-admin Firestore access."""
     decoded = verify_token(authorization)
+    require_portal_user(decoded)
     uid = decoded.get("uid")
     auth_client = get_auth_client()
     db_client = get_db_client()
