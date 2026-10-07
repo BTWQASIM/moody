@@ -62,8 +62,26 @@ function getPatientStatusLabel(status?: string) {
     case "pending_intake":
       return "Pending Intake"
     default:
-      return "Unknown"
+      // Older patient documents may not have a status. Treat that as the
+      // model's safe default instead of exposing an unhelpful "Unknown".
+      return "Pending Intake"
   }
+}
+
+function getPatientDisplayName(patient?: any) {
+  const name = `${patient?.firstName || ""} ${patient?.lastName || ""}`.trim()
+  return name || patient?.email || "Unnamed patient"
+}
+
+function getPatientInitials(patient?: any) {
+  const initials = `${patient?.firstName?.charAt(0) || ""}${patient?.lastName?.charAt(0) || ""}`.toUpperCase()
+  return initials || "P"
+}
+
+function formatPatientDate(value?: string) {
+  if (!value) return "Not specified"
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? "Not specified" : date.toLocaleDateString()
 }
 
 function PatientDetailContent() {
@@ -365,22 +383,12 @@ function PatientDetailContent() {
       title={
         patientLoading
           ? "Loading..."
-          : `${patient?.firstName || ""} ${
-              patient?.lastName || ""
-            }`.trim()
+          : getPatientDisplayName(patient)
       }
       subtitle={
         patientLoading
           ? "Loading patient information..."
-          : `${getPatientStatusLabel(
-              patient?.status,
-            )} · Member since ${
-              patient?.createdAt
-                ? new Date(
-                    patient.createdAt,
-                  ).toLocaleDateString()
-                : "N/A"
-            }`
+          : `${getPatientStatusLabel(patient?.status)} · Member since ${formatPatientDate(patient?.createdAt)}`
       }
     >
       <Button
@@ -411,26 +419,19 @@ function PatientDetailContent() {
               <div className="flex items-start gap-4">
                 <Avatar className="size-16">
                   <AvatarImage
-                    src={
-                      patient.profilePhoto ||
-                      "/placeholder.svg"
-                    }
-                    alt={`${patient.firstName || ""} ${
-                      patient.lastName || ""
-                    }`.trim()}
+                    src={patient.profilePhoto || ""}
+                    alt={getPatientDisplayName(patient)}
                   />
 
                   <AvatarFallback>
-                    {patient.firstName?.charAt(0)}
+                    {getPatientInitials(patient)}
                   </AvatarFallback>
                 </Avatar>
 
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
                     <h2 className="text-xl font-semibold text-foreground">
-                      {`${patient.firstName || ""} ${
-                        patient.lastName || ""
-                      }`.trim()}
+                      {getPatientDisplayName(patient)}
                     </h2>
 
                     <RiskBadge
@@ -441,7 +442,7 @@ function PatientDetailContent() {
                   <div className="mt-3 space-y-1 text-sm text-muted-foreground">
                     <div className="flex items-center gap-2">
                       <Mail className="h-4 w-4" />
-                      {patient.email}
+                      {patient.email || "Email not provided"}
                     </div>
 
                     {(patient.phone || patient.phoneNumber) && (
@@ -455,9 +456,7 @@ function PatientDetailContent() {
                       <div className="flex items-center gap-2">
                         <Calendar className="h-4 w-4" />
                         DOB:{" "}
-                        {new Date(
-                          patient.dateOfBirth,
-                        ).toLocaleDateString()}
+                        {formatPatientDate(patient.dateOfBirth)}
                       </div>
                     )}
                   </div>

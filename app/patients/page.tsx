@@ -364,22 +364,22 @@ function PatientsContent() {
                   <div className="flex items-start gap-3">
                     <Avatar className="size-12">
                       <AvatarImage
-                        src={p.profilePhoto || "/placeholder.svg"}
-                        alt={`${p.firstName} ${p.lastName}`}
+                        src={p.profilePhoto || ""}
+                        alt={`${p.firstName || ""} ${p.lastName || ""}`.trim() || p.email || "Unnamed patient"}
                       />
                       <AvatarFallback>
-                        {p.firstName?.charAt(0)}
+                        {`${p.firstName?.charAt(0) || ""}${p.lastName?.charAt(0) || ""}`.toUpperCase() || "P"}
                       </AvatarFallback>
                     </Avatar>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-2">
                         <p className="truncate font-semibold text-foreground">
-                          {`${p.firstName} ${p.lastName}`}
+                          {`${p.firstName || ""} ${p.lastName || ""}`.trim() || p.email || "Unnamed patient"}
                         </p>
                         <RiskBadge level={p.riskLevel || "low"} />
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        {p.email}
+                        {p.email || "Email not provided"}
                       </p>
                       {(p.phone || p.phoneNumber) && (
                         <p className="text-xs text-muted-foreground">
