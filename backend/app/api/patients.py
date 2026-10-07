@@ -263,21 +263,16 @@ async def delete_patient(patient_id: str, authorization: str = Header(...)):
         )
 
 
-class LinkFirebaseUidRequest(BaseModel):
-    firebaseUid: str
-
-
 @router.patch("/{patient_id}/link")
 async def link_patient_firebase_uid(
     patient_id: str,
-    request: LinkFirebaseUidRequest,
     authorization: str = Header(...),
 ):
-    """Link a patient's mobile Firebase Auth UID to their portal record.
+    """Link a patient to the mobile account matching their portal email.
 
     Once linked, the portal can fetch the patient's mood check-ins and journal
-    entries written from the mobile app.  The mobile app will also receive the
-    therapist's UID on their users/{uid} document so future writes are tagged.
+    entries written from the mobile app. Firebase UIDs are resolved with the
+    Admin SDK and are never required from or exposed to the therapist.
     """
     decoded = verify_token(authorization)
 
@@ -295,33 +290,89 @@ async def link_patient_firebase_uid(
                 detail="Not authorized to update this patient",
             )
 
-        firebase_uid = request.firebaseUid.strip()
-        if not firebase_uid:
+        patient_email = str(patient.get("email") or "").strip().lower()
+        if not patient_email:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="firebaseUid must not be empty",
+                detail="Add the patient's mobile login email before linking.",
             )
 
-        db.link_patient_firebase_uid(patient_id, firebase_uid)
+        auth_client = get_auth_client()
+        if not auth_client:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Firebase Authentication is unavailable.",
+            )
 
-        # Propagate therapist UID back to the patient's mobile users/{uid}
-        # document so new writes from the mobile app are tagged automatically.
-        from firebase_admin import firestore as admin_firestore
         try:
-            fs = admin_firestore.client()
-            fs.collection("users").document(firebase_uid).set(
-                {"therapistUid": decoded.get("uid")},
-                merge=True,
+            mobile_account = auth_client.get_user_by_email(patient_email)
+        except firebase_auth.UserNotFoundError as err:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=(
+                    f"No Moodie mobile account exists for {patient_email}. "
+                    "Ask the patient to register or update the patient email."
+                ),
+            ) from err
+
+        if mobile_account.disabled:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This patient's mobile account is disabled.",
             )
-        except Exception:
-            # Non-fatal: link is stored on the patients doc regardless
-            pass
+
+        account_claims = getattr(mobile_account, "custom_claims", None)
+        account_role = (
+            str(account_claims.get("role") or "").lower()
+            if isinstance(account_claims, dict)
+            else ""
+        )
+        if account_role in {"therapist", "admin"}:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The saved email belongs to a portal account, not a patient mobile account.",
+            )
+
+        firebase_uid = mobile_account.uid
+        conflicting_links = [
+            linked
+            for linked in db.find_patients_by_firebase_uid(firebase_uid)
+            if str(linked.get("id")) != patient_id
+        ]
+        if conflicting_links:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This mobile account is already linked to another portal patient.",
+            )
+
+        mobile_profile = db.get_mobile_user_profile(firebase_uid)
+        if not mobile_profile:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "The mobile login exists, but its patient profile is incomplete. "
+                    "Ask the patient to sign in and finish registration first."
+                ),
+            )
+        assigned_therapist = str(mobile_profile.get("therapistUid") or "").strip()
+        if assigned_therapist and assigned_therapist != decoded.get("uid"):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This mobile account is already linked to another therapist.",
+            )
+
+        db.link_patient_firebase_uid(
+            patient_id,
+            firebase_uid,
+            decoded.get("uid"),
+            previous_firebase_uid=patient.get("firebaseUid"),
+        )
 
         return {
             "status": "success",
-            "message": "Patient linked to Firebase account",
+            "message": "Patient linked to their Moodie mobile account",
             "patientId": patient_id,
-            "firebaseUid": firebase_uid,
+            "mobileAccountEmail": mobile_account.email or patient_email,
         }
     except HTTPException:
         raise
@@ -336,7 +387,7 @@ async def link_patient_firebase_uid(
 async def unlink_patient_firebase_uid(
     patient_id: str, authorization: str = Header(...)
 ):
-    """Remove the Firebase UID link from a patient record."""
+    """Remove the mobile-account link from both sides of the relationship."""
     decoded = verify_token(authorization)
 
     try:
@@ -353,7 +404,12 @@ async def unlink_patient_firebase_uid(
                 detail="Not authorized to update this patient",
             )
 
-        db.unlink_patient_firebase_uid(patient_id)
+        firebase_uid = str(patient.get("firebaseUid") or "").strip()
+        db.unlink_patient_firebase_uid(
+            patient_id,
+            firebase_uid,
+            decoded.get("uid"),
+        )
         return {"status": "success", "message": "Patient unlinked"}
     except HTTPException:
         raise
@@ -427,7 +483,6 @@ async def get_patient_mobile_activity(
         return {
             "status": "success",
             "linked": True,
-            "firebaseUid": firebase_uid,
             "mobileUserFound": mobile_user is not None,
             "mobileUserName": mobile_user.get("name") if mobile_user else None,
             "mobileUserEmail": mobile_user.get("email") if mobile_user else None,

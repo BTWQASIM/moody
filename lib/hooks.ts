@@ -468,7 +468,7 @@ export function useServices() {
 
 /**
  * Hook for fetching a patient's mobile app activity (mood check-ins + journal entries).
- * Requires the patient to be linked via patientAPI.linkFirebaseUid first.
+ * Requires the patient to be linked via patientAPI.linkMobileAccount first.
  */
 export function usePatientMobileActivity(
   patientId: string | null,
@@ -477,8 +477,9 @@ export function usePatientMobileActivity(
 ) {
   return useQuery<{
     linked: boolean
-    firebaseUid?: string
     mobileUserFound?: boolean
+    mobileUserName?: string
+    mobileUserEmail?: string
     moodCheckins: any[]
     journalEntries: any[]
   }>(
@@ -628,31 +629,23 @@ export function useDeletePatient() {
 }
 
 /**
- * Hook for linking a patient's mobile Firebase UID
+ * Hook for linking a patient to the mobile account matching their saved email.
  */
-export function useLinkPatientFirebaseUid() {
-  return useMutation(
-    async ({
-      patientId,
-      firebaseUid,
-    }: {
-      patientId: string
-      firebaseUid: string
-    }) => {
-      const result = await patientAPI.linkFirebaseUid(patientId, firebaseUid)
+export function useLinkPatientMobileAccount() {
+  return useMutation(async (patientId: string) => {
+    const result = await patientAPI.linkMobileAccount(patientId)
 
-      // Refresh the patient profile and its mobile activity immediately.
-      invalidateQueryCache("patient", [patientId])
-      invalidateQueryCache("patient-mobile-activity", [patientId, 30, 0])
+    // Refresh the patient profile and its mobile activity immediately.
+    invalidateQueryCache("patient", [patientId])
+    invalidateQueryCache("patient-mobile-activity", [patientId, 30, 0])
 
-      return result
-    }
-  )
+    return result
+  })
 }
 
-export function useUnlinkPatientFirebaseUid() {
+export function useUnlinkPatientMobileAccount() {
   return useMutation(async (patientId: string) => {
-    const result = await patientAPI.unlinkFirebaseUid(patientId)
+    const result = await patientAPI.unlinkMobileAccount(patientId)
 
     // Refresh the patient profile and its mobile activity immediately.
     invalidateQueryCache("patient", [patientId])

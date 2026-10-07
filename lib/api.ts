@@ -132,13 +132,13 @@ export const patientAPI = {
     return apiCall(`/api/patients/${patientId}`, "DELETE");
   },
 
-  /** Link a patient's mobile Firebase Auth UID to their portal record. */
-  async linkFirebaseUid(patientId: string, firebaseUid: string) {
-    return apiCall(`/api/patients/${patientId}/link`, "PATCH", { firebaseUid });
+  /** Link using the patient's saved mobile-login email; UID resolution stays server-side. */
+  async linkMobileAccount(patientId: string) {
+    return apiCall(`/api/patients/${patientId}/link`, "PATCH");
   },
 
-  /** Remove the Firebase UID link from a patient record. */
-  async unlinkFirebaseUid(patientId: string) {
+  /** Remove the mobile-account link from both patient records. */
+  async unlinkMobileAccount(patientId: string) {
     return apiCall(`/api/patients/${patientId}/link`, "DELETE");
   },
 

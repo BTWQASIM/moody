@@ -163,6 +163,27 @@ class FirestoreDAO:
                 return self._reveal_patient_fields(data)
         return None
 
+    def find_patients_by_firebase_uid(
+        self, firebase_uid: str
+    ) -> List[Dict[str, Any]]:
+        """Find every portal record linked to a mobile Firebase Auth account."""
+        if not self.db:
+            return []
+
+        docs = (
+            self.db.collection("patients")
+            .where("firebaseUid", "==", firebase_uid)
+            .stream()
+        )
+        rows: List[Dict[str, Any]] = []
+        for doc in docs:
+            data = cast(Any, doc).to_dict()
+            if not isinstance(data, dict):
+                continue
+            data["id"] = cast(Any, doc).id
+            rows.append(self._reveal_patient_fields(data))
+        return rows
+
     def ensure_patient_from_mobile_appointment(
         self, therapist_uid: str, appointment: Dict[str, Any]
     ) -> str:
@@ -876,7 +897,11 @@ class FirestoreDAO:
         }
 
     def link_patient_firebase_uid(
-        self, patient_id: str, firebase_uid: str
+        self,
+        patient_id: str,
+        firebase_uid: str,
+        therapist_uid: str,
+        previous_firebase_uid: Optional[str] = None,
     ) -> bool:
         """Store the patient's Firebase Auth UID on their portal `patients` document.
 
@@ -885,18 +910,45 @@ class FirestoreDAO:
         """
         if not self.db:
             return False
-        self.db.collection("patients").document(patient_id).update({
-            "firebaseUid": firebase_uid,
-            "updatedAt": datetime.utcnow(),
-        })
+        batch = self.db.batch()
+        patient_ref = self.db.collection("patients").document(patient_id)
+        mobile_ref = self.db.collection("users").document(firebase_uid)
+        batch.update(
+            patient_ref,
+            {"firebaseUid": firebase_uid, "updatedAt": datetime.utcnow()},
+        )
+        batch.set(mobile_ref, {"therapistUid": therapist_uid}, merge=True)
+
+        old_uid = str(previous_firebase_uid or "").strip()
+        if old_uid and old_uid != firebase_uid:
+            old_ref = self.db.collection("users").document(old_uid)
+            old_snapshot = old_ref.get()
+            old_data = old_snapshot.to_dict() if old_snapshot.exists else {}
+            if (old_data or {}).get("therapistUid") == therapist_uid:
+                batch.set(old_ref, {"therapistUid": None}, merge=True)
+
+        batch.commit()
         return True
 
-    def unlink_patient_firebase_uid(self, patient_id: str) -> bool:
+    def unlink_patient_firebase_uid(
+        self, patient_id: str, firebase_uid: str, therapist_uid: str
+    ) -> bool:
         """Remove the Firebase UID link from a patient's portal document."""
         if not self.db:
             return False
-        self.db.collection("patients").document(patient_id).update({
-            "firebaseUid": None,
-            "updatedAt": datetime.utcnow(),
-        })
+        batch = self.db.batch()
+        patient_ref = self.db.collection("patients").document(patient_id)
+        batch.update(
+            patient_ref,
+            {"firebaseUid": None, "updatedAt": datetime.utcnow()},
+        )
+
+        if firebase_uid:
+            mobile_ref = self.db.collection("users").document(firebase_uid)
+            mobile_snapshot = mobile_ref.get()
+            mobile_data = mobile_snapshot.to_dict() if mobile_snapshot.exists else {}
+            if (mobile_data or {}).get("therapistUid") == therapist_uid:
+                batch.set(mobile_ref, {"therapistUid": None}, merge=True)
+
+        batch.commit()
         return True

@@ -21,8 +21,8 @@ import {
   useCreateMoodEntry,
   useCreateClinicalNote,
   usePatientMobileActivity,
-  useLinkPatientFirebaseUid,
-  useUnlinkPatientFirebaseUid,
+  useLinkPatientMobileAccount,
+  useUnlinkPatientMobileAccount,
   useDeletePatient,
   useUpdatePatient,
   invalidateQueryCache,
@@ -136,14 +136,14 @@ function PatientDetailContent() {
   )
 
   const {
-    execute: linkFirebaseUid,
+    execute: linkMobileAccount,
     loading: linking,
-  } = useLinkPatientFirebaseUid()
+  } = useLinkPatientMobileAccount()
 
   const {
-    execute: unlinkFirebaseUid,
+    execute: unlinkMobileAccount,
     loading: unlinking,
-  } = useUnlinkPatientFirebaseUid()
+  } = useUnlinkPatientMobileAccount()
 
   const {
     execute: deletePatient,
@@ -168,7 +168,6 @@ function PatientDetailContent() {
 
   const [isMoodOpen, setIsMoodOpen] = useState(false)
   const [isNoteOpen, setIsNoteOpen] = useState(false)
-  const [isLinkOpen, setIsLinkOpen] = useState(false)
   const [isEditOpen, setIsEditOpen] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
   const [editForm, setEditForm] = useState({
@@ -180,7 +179,6 @@ function PatientDetailContent() {
     riskLevel: "low",
     clinicalNotes: "",
   })
-  const [firebaseUidInput, setFirebaseUidInput] = useState("")
   const [linkError, setLinkError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -334,36 +332,31 @@ function PatientDetailContent() {
     setIsNoteOpen(false)
   }
 
-  const handleLinkFirebaseUid = async (e: React.FormEvent) => {
-    e.preventDefault()
+  const handleLinkMobileAccount = async () => {
     setLinkError(null)
 
-    const uid = firebaseUidInput.trim()
-
-    if (!uid) {
-      setLinkError("Please enter the patient's Firebase UID.")
+    if (!patient?.email?.trim()) {
+      setLinkError("Add the patient's mobile login email before linking.")
       return
     }
 
     try {
-      await linkFirebaseUid({
-        patientId,
-        firebaseUid: uid,
-      })
-
-      setFirebaseUidInput("")
-      setIsLinkOpen(false)
+      await linkMobileAccount(patientId)
       setMobileActivityRefreshKey((key) => key + 1)
     } catch (err: any) {
       setLinkError(err?.message || "Failed to link account.")
     }
   }
 
-  const handleUnlinkFirebaseUid = async () => {
+  const handleUnlinkMobileAccount = async () => {
     setLinkError(null)
 
+    if (!window.confirm("Unlink this patient's mobile account? Their mobile data will remain saved and can be relinked by email.")) {
+      return
+    }
+
     try {
-      await unlinkFirebaseUid(patientId)
+      await unlinkMobileAccount(patientId)
       setMobileActivityRefreshKey((key) => key + 1)
     } catch (err: any) {
       setLinkError(err?.message || "Failed to unlink account.")
@@ -1068,209 +1061,71 @@ function PatientDetailContent() {
                     </p>
                   </div>
 
-                  {!mobileActivity?.linked ? (
-                    <Dialog
-                      open={isLinkOpen}
-                      onOpenChange={setIsLinkOpen}
-                    >
-                      <DialogTrigger
-                        render={
-                          <Button
-                            size="sm"
-                            variant="outline"
-                          >
-                            <Link2 className="h-4 w-4 mr-1" />
-                            Link Account
-                          </Button>
-                        }
-                      />
-
-                      <DialogContent>
-                        <DialogHeader>
-                          <DialogTitle>
-                            Link Patient's Mobile Account
-                          </DialogTitle>
-
-                          <DialogDescription>
-                            Paste the Firebase UID from the
-                            patient's moodie mobile app account
-                            — not the therapist account. Find it
-                            in Firebase Console →
-                            Authentication → Users, matching
-                            the patient's login email.
-                          </DialogDescription>
-                        </DialogHeader>
-
-                        <form
-                          onSubmit={handleLinkFirebaseUid}
-                          className="space-y-4"
-                        >
-                          <div className="space-y-2">
-                            <Label htmlFor="firebase-uid">
-                              Patient Firebase UID
-                            </Label>
-
-                            <Input
-                              id="firebase-uid"
-                              placeholder="e.g. abc123def456..."
-                              value={firebaseUidInput}
-                              onChange={(e) =>
-                                setFirebaseUidInput(
-                                  e.target.value,
-                                )
-                              }
-                              required
-                            />
-                          </div>
-
-                          {linkError && (
-                            <div className="flex items-center gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
-                              <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-                              {linkError}
-                            </div>
-                          )}
-
-                          <Button
-                            type="submit"
-                            disabled={
-                              linking ||
-                              !firebaseUidInput.trim()
-                            }
-                            className="w-full"
-                          >
-                            {linking ? (
-                              <>
-                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                Linking...
-                              </>
-                            ) : (
-                              "Link Account"
-                            )}
-                          </Button>
-                        </form>
-                      </DialogContent>
-                    </Dialog>
-                  ) : (
-                    <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {mobileActivity?.linked && (
                       <div className="flex items-center gap-2 rounded-full bg-green-100 px-3 py-1 text-xs font-medium text-green-700">
                         <span className="h-2 w-2 rounded-full bg-green-500" />
                         Linked
                       </div>
+                    )}
 
-                      <Dialog
-                        open={isLinkOpen}
-                        onOpenChange={setIsLinkOpen}
-                      >
-                        <DialogTrigger
-                          render={
-                            <Button
-                              size="sm"
-                              variant="outline"
-                            >
-                              Change UID
-                            </Button>
-                          }
-                        />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={linking || !patient?.email?.trim()}
+                      onClick={handleLinkMobileAccount}
+                    >
+                      {linking ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Link2 className="mr-1 h-4 w-4" />
+                      )}
+                      {linking
+                        ? "Linking..."
+                        : mobileActivity?.linked
+                          ? "Relink by Email"
+                          : "Link by Email"}
+                    </Button>
 
-                        <DialogContent>
-                          <DialogHeader>
-                            <DialogTitle>
-                              Change Linked Mobile Account
-                            </DialogTitle>
-
-                            <DialogDescription>
-                              Enter the correct Firebase UID for
-                              this patient's mobile app login.
-                            </DialogDescription>
-                          </DialogHeader>
-
-                          <form
-                            onSubmit={handleLinkFirebaseUid}
-                            className="space-y-4"
-                          >
-                            <div className="space-y-2">
-                              <Label htmlFor="firebase-uid-change">
-                                Patient Firebase UID
-                              </Label>
-
-                              <Input
-                                id="firebase-uid-change"
-                                placeholder="Paste the patient's mobile app UID"
-                                value={firebaseUidInput}
-                                onChange={(e) =>
-                                  setFirebaseUidInput(
-                                    e.target.value,
-                                  )
-                                }
-                                required
-                              />
-                            </div>
-
-                            {linkError && (
-                              <div className="flex items-center gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
-                                <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-                                {linkError}
-                              </div>
-                            )}
-
-                            <Button
-                              type="submit"
-                              disabled={
-                                linking ||
-                                !firebaseUidInput.trim()
-                              }
-                              className="w-full"
-                            >
-                              {linking
-                                ? "Updating..."
-                                : "Update Link"}
-                            </Button>
-                          </form>
-                        </DialogContent>
-                      </Dialog>
-
+                    {mobileActivity?.linked && (
                       <Button
                         size="sm"
                         variant="ghost"
                         disabled={unlinking}
-                        onClick={handleUnlinkFirebaseUid}
+                        onClick={handleUnlinkMobileAccount}
                       >
-                        {unlinking
-                          ? "Unlinking..."
-                          : "Unlink"}
+                        {unlinking ? "Unlinking..." : "Unlink"}
                       </Button>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </CardHeader>
 
-                {mobileActivity?.linked && (
-                  <CardContent className="space-y-2">
-                    <p className="text-xs text-muted-foreground">
-                      <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
-                        {mobileActivity.firebaseUid}
-                      </code>
-                    </p>
+                <CardContent className="space-y-2">
+                  <p className="text-xs text-muted-foreground">
+                    {mobileActivity?.linked
+                      ? `Linked to ${mobileActivity.mobileUserName || "the mobile account"} (${mobileActivity.mobileUserEmail || patient?.email || "email unavailable"}).`
+                      : patient?.email
+                        ? `The portal will securely match the mobile account registered as ${patient.email}.`
+                        : "Add the patient's mobile login email before linking."}
+                  </p>
 
-                    {mobileActivity.mobileUserFound ? (
-                      <p className="text-xs text-muted-foreground">
-                        Mobile account linked
-                      </p>
-                    ) : (
-                      <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                  {linkError && (
+                    <div className="flex items-center gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+                      <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                      {linkError}
+                    </div>
+                  )}
 
-                        <span>
-                          No mobile app profile found for this
-                          UID. You may have linked the wrong
-                          account — use{" "}
-                          <strong>Change UID</strong> and paste
-                          the UID from the patient's mobile login
-                          in Firebase Authentication.
-                        </span>
-                      </div>
-                    )}
-                  </CardContent>
-                )}
+                  {mobileActivity?.linked && !mobileActivity.mobileUserFound && (
+                    <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                      <span>
+                        The Auth account is linked, but its mobile profile is incomplete.
+                        Ask the patient to sign in and finish their profile.
+                      </span>
+                    </div>
+                  )}
+                </CardContent>
               </Card>
 
               {/* Error state */}

@@ -273,6 +273,112 @@ class PatientUseCaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["journalEntries"], [])
         fake_db.get_mobile_mood_checkins.assert_not_called()
 
+    async def test_mobile_account_is_resolved_from_patient_email(self):
+        fake_db = Mock()
+        fake_db.get_patient.return_value = {
+            "id": "patient-1",
+            "therapistUid": "therapist-1",
+            "email": " Patient@Moodie.com ",
+            "firebaseUid": None,
+        }
+        fake_db.find_patients_by_firebase_uid.return_value = []
+        fake_db.get_mobile_user_profile.return_value = {"therapistUid": "therapist-1"}
+        auth_client = Mock()
+        auth_client.get_user_by_email.return_value = Mock(
+            uid="mobile-auth-uid",
+            email="patient@moodie.com",
+            disabled=False,
+        )
+
+        with (
+            patch.object(patients, "db", fake_db),
+            patch.object(patients, "verify_token", return_value={"uid": "therapist-1"}),
+            patch.object(patients, "get_auth_client", return_value=auth_client),
+        ):
+            result = await patients.link_patient_firebase_uid(
+                "patient-1", "Bearer token"
+            )
+
+        auth_client.get_user_by_email.assert_called_once_with("patient@moodie.com")
+        fake_db.link_patient_firebase_uid.assert_called_once_with(
+            "patient-1",
+            "mobile-auth-uid",
+            "therapist-1",
+            previous_firebase_uid=None,
+        )
+        self.assertEqual(result["mobileAccountEmail"], "patient@moodie.com")
+        self.assertNotIn("firebaseUid", result)
+
+    async def test_link_reports_when_patient_has_no_mobile_account(self):
+        fake_db = Mock()
+        fake_db.get_patient.return_value = {
+            "therapistUid": "therapist-1",
+            "email": "patient@moodie.com",
+        }
+        auth_client = Mock()
+        auth_client.get_user_by_email.side_effect = patients.firebase_auth.UserNotFoundError(
+            "not found"
+        )
+
+        with (
+            patch.object(patients, "db", fake_db),
+            patch.object(patients, "verify_token", return_value={"uid": "therapist-1"}),
+            patch.object(patients, "get_auth_client", return_value=auth_client),
+            self.assertRaises(HTTPException) as raised,
+        ):
+            await patients.link_patient_firebase_uid("patient-1", "Bearer token")
+
+        self.assertEqual(raised.exception.status_code, 404)
+        self.assertIn("patient@moodie.com", raised.exception.detail)
+        fake_db.link_patient_firebase_uid.assert_not_called()
+
+    async def test_link_rejects_mobile_account_already_used_by_another_patient(self):
+        fake_db = Mock()
+        fake_db.get_patient.return_value = {
+            "therapistUid": "therapist-1",
+            "email": "patient@moodie.com",
+        }
+        fake_db.find_patients_by_firebase_uid.return_value = [
+            {"id": "patient-2", "therapistUid": "therapist-1"}
+        ]
+        auth_client = Mock()
+        auth_client.get_user_by_email.return_value = Mock(
+            uid="mobile-auth-uid",
+            email="patient@moodie.com",
+            disabled=False,
+        )
+
+        with (
+            patch.object(patients, "db", fake_db),
+            patch.object(patients, "verify_token", return_value={"uid": "therapist-1"}),
+            patch.object(patients, "get_auth_client", return_value=auth_client),
+            self.assertRaises(HTTPException) as raised,
+        ):
+            await patients.link_patient_firebase_uid("patient-1", "Bearer token")
+
+        self.assertEqual(raised.exception.status_code, 409)
+        fake_db.link_patient_firebase_uid.assert_not_called()
+
+    async def test_unlink_clears_the_known_mobile_association(self):
+        fake_db = Mock()
+        fake_db.get_patient.return_value = {
+            "therapistUid": "therapist-1",
+            "firebaseUid": "mobile-auth-uid",
+        }
+
+        with (
+            patch.object(patients, "db", fake_db),
+            patch.object(patients, "verify_token", return_value={"uid": "therapist-1"}),
+        ):
+            result = await patients.unlink_patient_firebase_uid(
+                "patient-1", "Bearer token"
+            )
+
+        fake_db.unlink_patient_firebase_uid.assert_called_once_with(
+            "patient-1", "mobile-auth-uid", "therapist-1"
+        )
+        self.assertEqual(result["status"], "success")
+
 
 class AppointmentUseCaseTests(unittest.IsolatedAsyncioTestCase):
     async def test_empty_appointment_update_is_rejected(self):

@@ -73,6 +73,24 @@ describe("authenticated API integration contract", () => {
     )
   })
 
+  it("links a mobile account without exposing or submitting a Firebase UID", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        jsonResponse({
+          status: "success",
+          mobileAccountEmail: "patient@moodie.com",
+        }),
+      )
+
+    await patientAPI.linkMobileAccount("portal-patient")
+
+    const [url, options] = fetchMock.mock.calls[0]
+    expect(url).toBe("http://localhost:8000/api/patients/portal-patient/link")
+    expect(options?.method).toBe("PATCH")
+    expect(options?.body).toBeUndefined()
+  })
+
   it("surfaces FastAPI validation details instead of a generic status", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       jsonResponse(
