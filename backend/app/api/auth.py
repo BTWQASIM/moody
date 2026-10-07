@@ -565,6 +565,14 @@ async def list_therapists_for_admin(authorization: str = Header(...)):
     _require_admin(decoded, db_client)
 
     try:
+        uploaded_documents_by_owner: Dict[str, List[str]] = {}
+        for upload_doc in db_client.collection("uploadedFiles").stream():
+            upload = upload_doc.to_dict() or {}
+            owner_uid = str(upload.get("ownerUid") or "")
+            file_url = str(upload.get("fileUrl") or "")
+            if upload.get("category") == "document" and owner_uid and file_url:
+                uploaded_documents_by_owner.setdefault(owner_uid, []).append(file_url)
+
         docs = db_client.collection("therapists").stream()
         therapists = []
         for doc in docs:
@@ -582,6 +590,16 @@ async def list_therapists_for_admin(authorization: str = Header(...)):
             profile.setdefault("role", "therapist")
             profile.setdefault("verified", False)
             profile.setdefault("status", "pending_verification")
+            submitted_urls = [
+                str(url)
+                for url in (profile.get("documentUrls") or [])
+                if isinstance(url, str) and url
+            ]
+            profile["documentUrls"] = list(
+                dict.fromkeys(
+                    submitted_urls + uploaded_documents_by_owner.get(doc.id, [])
+                )
+            )
             therapists.append(profile)
 
         therapists.sort(key=lambda t: str(t.get("createdAt", "")), reverse=True)

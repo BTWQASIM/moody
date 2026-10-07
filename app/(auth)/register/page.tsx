@@ -139,7 +139,8 @@ export default function RegisterPage() {
 
       if (!res.ok) {
         setDocStatus("failed")
-        throw new Error("Failed to upload one or more documents")
+        const payload = await res.json().catch(() => ({}))
+        throw new Error(payload.detail || `Failed to upload ${file.name}`)
       }
 
       const data = await res.json()
@@ -546,9 +547,20 @@ export default function RegisterPage() {
                 className="sr-only"
                 onChange={(e) => {
                   const selectedFiles = Array.from(e.target.files || [])
+                  const oversizedFile = selectedFiles.find(
+                    (file) => file.size > 5 * 1024 * 1024,
+                  )
+                  if (oversizedFile) {
+                    setDocumentFiles([])
+                    setDocStatus("failed")
+                    setError(`${oversizedFile.name} exceeds the 5 MB document limit.`)
+                    e.target.value = ""
+                    return
+                  }
                   setDocumentFiles(selectedFiles)
                   setDocStatus(selectedFiles.length > 0 ? "selected" : "idle")
                   setUploadedDocCount(0)
+                  setError("")
                 }}
               />
             </label>
@@ -561,7 +573,7 @@ export default function RegisterPage() {
                     ? "Document upload failed"
                     : documentFiles.length > 0
                       ? `${documentFiles.length} document(s) selected`
-                      : "No documents selected"}
+                      : "No documents selected (PDF, PNG, or JPG; max 5 MB each)"}
             </p>
           </div>
 

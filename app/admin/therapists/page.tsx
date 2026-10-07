@@ -52,6 +52,7 @@ function TherapistAccessContent() {
   const [therapists, setTherapists] = useState<Therapist[]>([])
   const [loading, setLoading] = useState(true)
   const [savingUid, setSavingUid] = useState<string | null>(null)
+  const [openingDocument, setOpeningDocument] = useState<string | null>(null)
   const [error, setError] = useState("")
   const [success, setSuccess] = useState("")
   const [edits, setEdits] = useState<Record<string, EditState>>({})
@@ -217,6 +218,47 @@ function TherapistAccessContent() {
     }
   }
 
+  async function viewCredentialDocument(url: string, documentKey: string) {
+    if (!user) return
+
+    setOpeningDocument(documentKey)
+    setError("")
+    try {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+      if (!url.startsWith("/api/uploads/file/")) {
+        const externalUrl = new URL(url)
+        if (!["https:", "http:"].includes(externalUrl.protocol)) {
+          throw new Error("Credential document URL is invalid")
+        }
+        window.open(externalUrl.toString(), "_blank", "noopener,noreferrer")
+        return
+      }
+
+      const token = await user.getIdToken()
+      const response = await fetch(`${apiBase}${url}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}))
+        throw new Error(payload.detail || "Failed to open credential document")
+      }
+
+      const objectUrl = URL.createObjectURL(await response.blob())
+      const link = document.createElement("a")
+      link.href = objectUrl
+      link.target = "_blank"
+      link.rel = "noopener noreferrer"
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000)
+    } catch (err: any) {
+      setError(err.message || "Failed to open credential document")
+    } finally {
+      setOpeningDocument(null)
+    }
+  }
+
   function updateEdit(uid: string, patch: Partial<EditState>) {
     setEdits((prev) => ({
       ...prev,
@@ -338,7 +380,25 @@ function TherapistAccessContent() {
                     <div>
                       <p className="text-sm font-medium">Credential Documents</p>
                       {therapist.documentUrls?.length ? (
-                        <div className="mt-1 flex flex-wrap gap-2">{therapist.documentUrls.map((url, index) => <a key={url} href={url} target="_blank" rel="noreferrer" className="text-sm text-primary underline">Document {index + 1}</a>)}</div>
+                        <div className="mt-1 flex flex-wrap gap-2">
+                          {therapist.documentUrls.map((url, index) => {
+                            const documentKey = `${therapist.uid}-${index}`
+                            return (
+                              <Button
+                                key={`${url}-${index}`}
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                disabled={openingDocument === documentKey}
+                                onClick={() => viewCredentialDocument(url, documentKey)}
+                              >
+                                {openingDocument === documentKey
+                                  ? "Opening..."
+                                  : `View Document ${index + 1}`}
+                              </Button>
+                            )
+                          })}
+                        </div>
                       ) : <p className="text-sm text-destructive">No credential documents uploaded</p>}
                     </div>
 

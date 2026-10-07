@@ -98,6 +98,18 @@ class AdminUseCaseTests(unittest.IsolatedAsyncioTestCase):
                     "listed-admin": {"name": "Listed Admin"},
                 },
                 "admins": {"listed-admin": {"role": "admin"}},
+                "uploadedFiles": {
+                    "credential-1": {
+                        "ownerUid": "pending-1",
+                        "category": "document",
+                        "fileUrl": "/api/uploads/file/credential-1",
+                    },
+                    "recording-1": {
+                        "ownerUid": "pending-1",
+                        "category": "audio_recording",
+                        "fileUrl": "/api/uploads/file/recording-1",
+                    },
+                },
             }
         )
         with (
@@ -109,6 +121,10 @@ class AdminUseCaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["count"], 1)
         self.assertEqual(result["therapists"][0]["uid"], "pending-1")
         self.assertFalse(result["therapists"][0]["verified"])
+        self.assertEqual(
+            result["therapists"][0]["documentUrls"],
+            ["/api/uploads/file/credential-1"],
+        )
 
     async def test_admin_notification_queue_only_contains_pending_applications(self):
         db_client = FakeFirestore(

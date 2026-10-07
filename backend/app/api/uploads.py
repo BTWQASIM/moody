@@ -37,6 +37,8 @@ LOCAL_UPLOADS_URL_BASE = os.getenv(
 PROFILE_PHOTO_SIZE = (512, 512)
 PROFILE_PHOTO_MAX_BYTES = 700 * 1024
 PROFILE_PHOTO_MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+DOCUMENT_MAX_BYTES = 5 * 1024 * 1024
+DOCUMENT_CHUNK_BYTES = 700 * 1024
 ALLOW_LOCAL_UPLOAD_FALLBACK = os.getenv(
     "ALLOW_LOCAL_UPLOAD_FALLBACK",
     "false" if os.getenv("RENDER") else "true",
@@ -151,6 +153,119 @@ def persist_uploaded_file(
         }
     )
     return ref.id
+
+
+def validate_credential_document(
+    filename: str, content_type: str, contents: bytes
+) -> tuple[str, str]:
+    """Validate credential files before storing them in Firestore."""
+    extension = Path(filename or "").suffix.lower()
+    canonical_types = {
+        ".pdf": "application/pdf",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+    }
+    if extension not in canonical_types:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="License documents must be PDF, PNG, JPG, or JPEG files",
+        )
+    if not contents:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The selected document is empty",
+        )
+    if len(contents) > DOCUMENT_MAX_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File too large (max 5MB)",
+        )
+
+    if extension == ".pdf":
+        if not contents.startswith(b"%PDF-"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The selected PDF is invalid or corrupted",
+            )
+    else:
+        try:
+            with Image.open(BytesIO(contents)) as image:
+                image.verify()
+        except (UnidentifiedImageError, Image.DecompressionBombError, OSError) as err:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The selected image is invalid or corrupted",
+            ) from err
+
+    return extension.lstrip("."), canonical_types[extension]
+
+
+def persist_credential_document(
+    *,
+    owner_uid: str,
+    document_type: str,
+    original_name: str,
+    content_type: str,
+    contents: bytes,
+) -> tuple[str, str, str]:
+    """Atomically store a small credential document as Firestore chunks."""
+    if not db.db:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Firestore is not configured",
+        )
+
+    ref = db.db.collection("uploadedFiles").document()
+    file_url = f"/api/uploads/file/{ref.id}"
+    file_path = f"firestoreDocuments/{owner_uid}/{ref.id}"
+    chunks = [
+        contents[offset : offset + DOCUMENT_CHUNK_BYTES]
+        for offset in range(0, len(contents), DOCUMENT_CHUNK_BYTES)
+    ]
+    batch = db.db.batch()
+    batch.set(
+        ref,
+        {
+            "id": ref.id,
+            "ownerUid": owner_uid,
+            "category": "document",
+            "documentType": document_type,
+            "storageBackend": "firestore_chunks",
+            "filePath": file_path,
+            "fileUrl": file_url,
+            "originalName": original_name,
+            "contentType": content_type,
+            "size": len(contents),
+            "chunkCount": len(chunks),
+            "createdAt": firestore.SERVER_TIMESTAMP,
+        },
+    )
+    for index, chunk in enumerate(chunks):
+        batch.set(
+            ref.collection("chunks").document(f"{index:04d}"),
+            {"index": index, "content": chunk},
+        )
+    batch.commit()
+    return ref.id, file_url, file_path
+
+
+def can_read_uploaded_file(decoded: dict, metadata: dict) -> bool:
+    """Allow the owner or a Firestore-backed administrator to read a file."""
+    uid = decoded.get("uid")
+    if uid and metadata.get("ownerUid") == uid:
+        return True
+    if decoded.get("role") == "admin":
+        return True
+    if not uid or not db.db:
+        return False
+    admin_doc = db.db.collection("admins").document(uid).get()
+    if admin_doc.exists:
+        return True
+    therapist_doc = db.db.collection("therapists").document(uid).get()
+    if therapist_doc.exists:
+        return (therapist_doc.to_dict() or {}).get("role") == "admin"
+    return False
 
 
 def normalize_profile_photo(contents: bytes) -> bytes:
@@ -314,38 +429,26 @@ async def upload_document(
             detail=f"Invalid document type. Allowed: {', '.join(allowed_types)}",
         )
 
-    if file.size and file.size > 10 * 1024 * 1024:  # 10MB limit
+    if file.size and file.size > DOCUMENT_MAX_BYTES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="File too large (max 10MB)",
+            detail="File too large (max 5MB)",
         )
 
     try:
         contents = await file.read()
-        if len(contents) > 10 * 1024 * 1024:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="File too large (max 10MB)",
-            )
-        ext = file.filename.split(".")[-1] if file.filename else "pdf"
-        ext = sanitize_segment(ext.lower())
-        file_path = (
-            f"documents/{sanitize_segment(user_id)}/{sanitize_segment(documentType)}/"
-            f"{datetime.utcnow().timestamp()}-{secrets.token_hex(4)}.{ext}"
-        )
-        file_url = upload_to_storage_or_local(
-            file_path,
-            contents,
+        original_name = file.filename or "license.pdf"
+        _, canonical_content_type = validate_credential_document(
+            original_name,
             file.content_type or "application/octet-stream",
+            contents,
         )
-        file_record_id = persist_uploaded_file(
+        file_record_id, file_url, file_path = persist_credential_document(
             owner_uid=user_id,
-            category="document",
-            file_path=file_path,
-            file_url=file_url,
-            original_name=file.filename or f"document.{ext}",
-            content_type=file.content_type or "application/octet-stream",
-            size=len(contents),
+            document_type=documentType,
+            original_name=original_name,
+            content_type=canonical_content_type,
+            contents=contents,
         )
 
         return {
@@ -363,6 +466,75 @@ async def upload_document(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Upload failed: {str(err)}",
         )
+
+
+@router.get("/file/{file_id}")
+async def get_uploaded_file(file_id: str, authorization: str = Header(...)):
+    """Stream a Firestore-backed credential document to its owner or an admin."""
+    decoded = verify_token(authorization)
+    if not db.db:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Firestore is not configured",
+        )
+
+    ref = db.db.collection("uploadedFiles").document(file_id)
+    snapshot = ref.get()
+    if not snapshot.exists:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found",
+        )
+    metadata = snapshot.to_dict() or {}
+    if (
+        metadata.get("category") != "document"
+        or metadata.get("storageBackend") != "firestore_chunks"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found",
+        )
+    if not can_read_uploaded_file(decoded, metadata):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to view this document",
+        )
+
+    try:
+        chunk_count = int(metadata.get("chunkCount") or 0)
+        if chunk_count <= 0:
+            raise ValueError("missing chunks")
+        chunks = []
+        for index in range(chunk_count):
+            chunk = ref.collection("chunks").document(f"{index:04d}").get()
+            if not chunk.exists:
+                raise ValueError("missing chunk")
+            content = (chunk.to_dict() or {}).get("content")
+            if not isinstance(content, bytes):
+                raise ValueError("invalid chunk")
+            chunks.append(content)
+        contents = b"".join(chunks)
+        if len(contents) != int(metadata.get("size") or -1):
+            raise ValueError("size mismatch")
+    except (TypeError, ValueError) as err:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Stored document is incomplete or corrupted",
+        ) from err
+
+    original_name = sanitize_segment(str(metadata.get("originalName") or "document"))
+    encoded_name = quote(str(metadata.get("originalName") or "document"), safe="")
+    return Response(
+        content=contents,
+        media_type=str(metadata.get("contentType") or "application/octet-stream"),
+        headers={
+            "Cache-Control": "private, no-store",
+            "Content-Disposition": (
+                f"inline; filename=\"{original_name}\"; filename*=UTF-8''{encoded_name}"
+            ),
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.post("/audio-recording")

@@ -70,6 +70,113 @@ class DurableFileUploadTests(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 503)
         local_upload.assert_not_called()
 
+    def test_validates_real_pdf_and_rejects_spoofed_pdf(self):
+        extension, content_type = uploads.validate_credential_document(
+            "license.pdf", "application/pdf", b"%PDF-1.7\ncredential"
+        )
+        self.assertEqual(extension, "pdf")
+        self.assertEqual(content_type, "application/pdf")
+
+        with self.assertRaises(HTTPException) as raised:
+            uploads.validate_credential_document(
+                "license.pdf", "application/pdf", b"not a pdf"
+            )
+        self.assertEqual(raised.exception.status_code, 400)
+
+    def test_credential_document_is_chunked_in_one_firestore_batch(self):
+        fake_db = Mock()
+        file_ref = Mock(id="file-1")
+        fake_db.collection.return_value.document.return_value = file_ref
+        batch = fake_db.batch.return_value
+        fake_dao = Mock(db=fake_db)
+
+        with (
+            patch.object(uploads, "db", fake_dao),
+            patch.object(uploads, "DOCUMENT_CHUNK_BYTES", 4),
+        ):
+            file_id, file_url, file_path = uploads.persist_credential_document(
+                owner_uid="therapist-1",
+                document_type="license",
+                original_name="license.pdf",
+                content_type="application/pdf",
+                contents=b"%PDF-12345",
+            )
+
+        self.assertEqual(file_id, "file-1")
+        self.assertEqual(file_url, "/api/uploads/file/file-1")
+        self.assertIn("therapist-1", file_path)
+        self.assertEqual(batch.set.call_count, 4)  # metadata + three chunks
+        batch.commit.assert_called_once_with()
+
+
+class CredentialDocumentEndpointTests(unittest.IsolatedAsyncioTestCase):
+    async def test_document_upload_uses_firestore_when_storage_bucket_is_absent(self):
+        upload = Mock(
+            filename="license.pdf",
+            content_type="application/pdf",
+            size=24,
+        )
+        upload.read = AsyncMock(return_value=b"%PDF-1.7\nlicense-data")
+
+        with (
+            patch.object(uploads, "verify_token", return_value={"uid": "therapist-1"}),
+            patch.object(
+                uploads,
+                "persist_credential_document",
+                return_value=(
+                    "file-1",
+                    "/api/uploads/file/file-1",
+                    "firestoreDocuments/therapist-1/file-1",
+                ),
+            ) as persist,
+            patch.object(uploads, "upload_to_storage_or_local") as storage_upload,
+        ):
+            result = await uploads.upload_document(
+                upload, "license", "Bearer token"
+            )
+
+        persist.assert_called_once()
+        storage_upload.assert_not_called()
+        self.assertEqual(result["fileRecordId"], "file-1")
+        self.assertEqual(result["fileUrl"], "/api/uploads/file/file-1")
+
+    async def test_owner_can_view_reassembled_credential_document(self):
+        metadata = Mock(exists=True)
+        metadata.to_dict.return_value = {
+            "ownerUid": "therapist-1",
+            "category": "document",
+            "storageBackend": "firestore_chunks",
+            "chunkCount": 2,
+            "size": 11,
+            "contentType": "application/pdf",
+            "originalName": "license.pdf",
+        }
+        chunks = []
+        for content in (b"%PDF-", b"data!!"):
+            snapshot = Mock(exists=True)
+            snapshot.to_dict.return_value = {"content": content}
+            chunks.append(snapshot)
+        chunk_collection = Mock()
+        chunk_collection.document.side_effect = [
+            Mock(get=Mock(return_value=chunks[0])),
+            Mock(get=Mock(return_value=chunks[1])),
+        ]
+        file_ref = Mock()
+        file_ref.get.return_value = metadata
+        file_ref.collection.return_value = chunk_collection
+        fake_db = Mock()
+        fake_db.collection.return_value.document.return_value = file_ref
+        fake_dao = Mock(db=fake_db)
+
+        with (
+            patch.object(uploads, "db", fake_dao),
+            patch.object(uploads, "verify_token", return_value={"uid": "therapist-1"}),
+        ):
+            response = await uploads.get_uploaded_file("file-1", "Bearer token")
+
+        self.assertEqual(response.body, b"%PDF-data!!")
+        self.assertEqual(response.media_type, "application/pdf")
+
 
 class SessionExportPersistenceTests(unittest.IsolatedAsyncioTestCase):
     async def test_export_uses_dedicated_fields_and_preserves_session_notes(self):
