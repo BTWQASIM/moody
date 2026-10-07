@@ -131,6 +131,8 @@ export function Topbar({ title, subtitle }: { title: string; subtitle?: string }
 
     if (role === "admin") {
       router.push(`/admin/therapists?q=${encodeURIComponent(term)}`)
+    } else {
+      router.push(`/patients?q=${encodeURIComponent(term)}`)
     }
   }
 

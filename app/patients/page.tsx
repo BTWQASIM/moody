@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from "react"
 import Link from "next/link"
+import { useSearchParams } from "next/navigation"
 import { PortalShell } from "@/components/portal-shell"
 import { ProtectedRoute } from "@/app/protected-route"
 import { Card } from "@/components/ui/card"
@@ -19,14 +20,12 @@ import {
 import {
   invalidateQueryCache,
   usePatients,
-  useUpdatePatient,
   useCreatePatient,
 } from "@/lib/hooks"
 import {
   Search,
   Plus,
   Calendar,
-  Mail,
   AlertCircle,
   Loader2,
 } from "lucide-react"
@@ -49,6 +48,7 @@ type PatientRecord = {
   lastName?: string
   email?: string
   phoneNumber?: string
+  phone?: string
   profilePhoto?: string
   riskLevel?: string
   status?: string
@@ -56,6 +56,7 @@ type PatientRecord = {
 }
 
 function PatientsContent() {
+  const searchParams = useSearchParams()
   const [refreshKey, setRefreshKey] = useState(0)
   const { data: patients, loading, error } = usePatients(refreshKey)
   const {
@@ -63,9 +64,7 @@ function PatientsContent() {
     loading: creating,
     error: createError,
   } = useCreatePatient()
-  const { execute: updatePatient, loading: updating } = useUpdatePatient()
-
-  const [query, setQuery] = useState("")
+  const [query, setQuery] = useState(searchParams.get("q") || "")
   const [riskFilter, setRiskFilter] = useState<string>("all")
   const [statusFilter, setStatusFilter] = useState<string>("all")
   const [currentPage, setCurrentPage] = useState(1)
@@ -228,8 +227,9 @@ function PatientsContent() {
               <SelectContent>
                 <SelectItem value="all">All Status</SelectItem>
                 <SelectItem value="active">Active</SelectItem>
-                <SelectItem value="new">New</SelectItem>
+                <SelectItem value="pending_intake">Pending Intake</SelectItem>
                 <SelectItem value="inactive">Inactive</SelectItem>
+                <SelectItem value="discharged">Discharged</SelectItem>
               </SelectContent>
             </Select>
             <Dialog open={isNewPatientOpen} onOpenChange={setIsNewPatientOpen}>
@@ -381,9 +381,9 @@ function PatientsContent() {
                       <p className="text-xs text-muted-foreground">
                         {p.email}
                       </p>
-                      {p.phoneNumber && (
+                      {(p.phone || p.phoneNumber) && (
                         <p className="text-xs text-muted-foreground">
-                          {p.phoneNumber}
+                          {p.phone || p.phoneNumber}
                         </p>
                       )}
                     </div>
@@ -391,16 +391,18 @@ function PatientsContent() {
                   <div className="mt-4 flex items-center justify-between border-t border-border pt-3 text-sm">
                     <span className="flex items-center gap-1.5 text-muted-foreground">
                       <Calendar className="size-3.5" />
-                      {new Date(p.createdAt).toLocaleDateString("en-US", {
-                        month: "short",
-                        year: "numeric",
-                      })}
+                      {p.createdAt
+                        ? new Date(p.createdAt).toLocaleDateString("en-US", {
+                            month: "short",
+                            year: "numeric",
+                          })
+                        : "N/A"}
                     </span>
                     <span
                       className={`text-xs font-medium rounded px-2 py-1 ${
                         p.status === "active"
                           ? "bg-green-100 text-green-700"
-                          : p.status === "new"
+                        : p.status === "pending_intake"
                           ? "bg-blue-100 text-blue-700"
                           : "bg-gray-100 text-gray-700"
                       }`}
@@ -457,7 +459,7 @@ function PatientsContent() {
 
 export default function PatientsPage() {
   return (
-    <ProtectedRoute>
+    <ProtectedRoute allowedRoles={["therapist"]} requireVerified>
       <PatientsContent />
     </ProtectedRoute>
   )

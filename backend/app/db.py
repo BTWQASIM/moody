@@ -45,6 +45,8 @@ class FirestoreDAO:
         for doc in docs:
             data = cast(Any, doc).to_dict()
             if isinstance(data, dict):
+                if not data.get("id"):
+                    data["id"] = cast(Any, doc).id
                 rows.append(data)
         return rows
 
@@ -507,11 +509,10 @@ class FirestoreDAO:
     # ========================================================================
 
     def get_services_for_therapist(self, therapist_uid: str) -> List[Dict[str, Any]]:
-        """Get all active services for a therapist"""
+        """Get all services for a therapist, including inactive offerings."""
         if not self.db:
             return []
-        # Query only by therapist UID to avoid composite-index requirements,
-        # then filter active services in application code.
+        # Query only by therapist UID to avoid composite-index requirements.
         docs = (
             self.db.collection("services")
             .where("therapistUid", "==", therapist_uid)
@@ -528,7 +529,7 @@ class FirestoreDAO:
         for row in services:
             if "isActive" not in row:
                 row["isActive"] = True
-        return [row for row in services if row.get("isActive", True)]
+        return services
 
     def create_service(self, service: ServiceOffering) -> str:
         """Create a new service offering"""
@@ -631,7 +632,11 @@ class FirestoreDAO:
         """Mark a risk alert as acknowledged"""
         if not self.db:
             return False
-        self.db.collection("riskAlerts").document(alert_id).update({
+        ref = self.db.collection("riskAlerts").document(alert_id)
+        alert = self._doc_data(ref.get())
+        if not alert or alert.get("therapistUid") != therapist_uid:
+            return False
+        ref.update({
             "isAcknowledged": True,
             "acknowledgedAt": datetime.utcnow(),
             "acknowledgedBy": therapist_uid,
@@ -666,6 +671,26 @@ class FirestoreDAO:
             notification.model_dump(by_alias=False)
         )
         return doc_ref[1].id
+
+    def mark_notifications_read(self, user_id: str) -> int:
+        """Mark the authenticated user's stored notifications as read."""
+        if not self.db:
+            return 0
+        docs = (
+            self.db.collection("notifications")
+            .where("userId", "==", user_id)
+            .stream()
+        )
+        updated = 0
+        for doc in docs:
+            data = cast(Any, doc).to_dict() or {}
+            if data.get("isRead", False):
+                continue
+            cast(Any, doc).reference.update(
+                {"isRead": True, "readAt": datetime.utcnow()}
+            )
+            updated += 1
+        return updated
 
     # ========================================================================
     # Audit Log Operations

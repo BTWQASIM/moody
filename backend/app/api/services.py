@@ -5,27 +5,32 @@ Services management API endpoints
 from typing import Optional
 from fastapi import APIRouter, HTTPException, status, Header
 from firebase_admin import auth as firebase_auth
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.models import ServiceOffering
 from app.db import FirestoreDAO
+from app.api.security import require_verified_therapist
 
 router = APIRouter(prefix="/api/services", tags=["services"])
 db = FirestoreDAO()
 
 
 class ServiceRequest(BaseModel):
-    name: str
+    name: str = Field(min_length=1)
     description: str
-    duration: int  # minutes
-    price: float
+    duration: int = Field(gt=0)  # minutes
+    price: float = Field(ge=0)
+    specialization: Optional[str] = None
+    deliveryMode: Optional[str] = None
 
 
 class ServiceUpdateRequest(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
-    duration: Optional[int] = None
-    price: Optional[float] = None
+    duration: Optional[int] = Field(default=None, gt=0)
+    price: Optional[float] = Field(default=None, ge=0)
+    specialization: Optional[str] = None
+    deliveryMode: Optional[str] = None
     isActive: Optional[bool] = None
 
 
@@ -39,7 +44,10 @@ def verify_token(authorization: str = Header(...)):
             )
         token = authorization.split(" ")[1]
         decoded = firebase_auth.verify_id_token(token)
+        require_verified_therapist(decoded)
         return decoded
+    except HTTPException:
+        raise
     except Exception as err:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -85,6 +93,8 @@ async def create_service(
             description=request.description,
             duration=request.duration,
             price=request.price,
+            specialization=request.specialization,
+            deliveryMode=request.deliveryMode,
             isActive=True,
             createdAt=datetime.utcnow(),
             updatedAt=datetime.utcnow(),

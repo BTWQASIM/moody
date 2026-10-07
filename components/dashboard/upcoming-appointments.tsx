@@ -47,12 +47,13 @@ export function UpcomingAppointments() {
     tomorrow.setDate(tomorrow.getDate() + 1)
     const nextWeek = new Date(today)
     nextWeek.setDate(nextWeek.getDate() + 7)
+    const schedulableStatuses = new Set(["pending", "confirmed", "rescheduled"])
 
     const today_ = appointmentList
       .filter((a: any) => {
         const aptDate = new Date(a.scheduledAt)
         aptDate.setHours(0, 0, 0, 0)
-        return aptDate.getTime() === today.getTime() && new Date(a.scheduledAt) > now
+        return aptDate.getTime() === today.getTime() && new Date(a.scheduledAt) > now && schedulableStatuses.has(a.status)
       })
       .sort(
         (a: any, b: any) =>
@@ -63,7 +64,7 @@ export function UpcomingAppointments() {
     const upcoming = appointmentList
       .filter((a: any) => {
         const aptDate = new Date(a.scheduledAt)
-        return aptDate >= tomorrow && aptDate < nextWeek
+        return aptDate >= tomorrow && aptDate < nextWeek && schedulableStatuses.has(a.status)
       })
       .sort(
         (a: any, b: any) =>

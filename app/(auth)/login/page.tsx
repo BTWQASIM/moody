@@ -5,7 +5,13 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { motion } from "motion/react"
 import { Eye, EyeOff, Heart, Shield } from "lucide-react"
-import { signInWithEmailAndPassword, signOut } from "firebase/auth"
+import {
+  browserLocalPersistence,
+  browserSessionPersistence,
+  setPersistence,
+  signInWithEmailAndPassword,
+  signOut,
+} from "firebase/auth"
 import { auth } from "@/lib/firebase"
 import { terminatePortalSession } from "@/lib/auth-session"
 
@@ -47,6 +53,10 @@ export default function LoginPage() {
     setError("")
 
     try {
+      await setPersistence(
+        auth,
+        remember ? browserLocalPersistence : browserSessionPersistence,
+      )
       const credential = await signInWithEmailAndPassword(auth, email.trim(), password)
       const tokenResult = await credential.user.getIdTokenResult(true)
       const token = tokenResult.token

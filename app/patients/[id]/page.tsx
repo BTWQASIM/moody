@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { useParams, useRouter } from "next/navigation"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { PortalShell } from "@/components/portal-shell"
 import { ProtectedRoute } from "@/app/protected-route"
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
@@ -24,6 +24,7 @@ import {
   useLinkPatientFirebaseUid,
   useUnlinkPatientFirebaseUid,
   useDeletePatient,
+  useUpdatePatient,
   invalidateQueryCache,
 } from "@/lib/hooks"
 import {
@@ -38,6 +39,7 @@ import {
   Link2,
   BookOpen,
   Activity,
+  Pencil,
 } from "lucide-react"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
@@ -51,20 +53,16 @@ import {
 
 function getPatientStatusLabel(status?: string) {
   switch (status?.toLowerCase()) {
-    case "pending":
-      return "Pending"
-    case "confirmed":
-      return "Confirmed"
-    case "completed":
-      return "Completed"
-    case "cancelled":
-      return "Cancelled"
-    case "rescheduled":
-      return "Rescheduled"
-    case "no_show":
-      return "No Show"
+    case "active":
+      return "Active"
+    case "inactive":
+      return "Inactive"
+    case "discharged":
+      return "Discharged"
+    case "pending_intake":
+      return "Pending Intake"
     default:
-      return "Pending"
+      return "Unknown"
   }
 }
 
@@ -77,6 +75,7 @@ function PatientDetailContent() {
     data: patient,
     loading: patientLoading,
     error: patientError,
+    refetch: refetchPatient,
   } = usePatient(patientId)
 
   const {
@@ -133,6 +132,11 @@ function PatientDetailContent() {
     loading: deleting,
   } = useDeletePatient()
 
+  const {
+    execute: updatePatient,
+    loading: updatingPatient,
+  } = useUpdatePatient()
+
   const [moodForm, setMoodForm] = useState({
     moodScore: 5,
     description: "",
@@ -147,8 +151,58 @@ function PatientDetailContent() {
   const [isMoodOpen, setIsMoodOpen] = useState(false)
   const [isNoteOpen, setIsNoteOpen] = useState(false)
   const [isLinkOpen, setIsLinkOpen] = useState(false)
+  const [isEditOpen, setIsEditOpen] = useState(false)
+  const [editError, setEditError] = useState<string | null>(null)
+  const [editForm, setEditForm] = useState({
+    firstName: "",
+    lastName: "",
+    email: "",
+    phone: "",
+    status: "pending_intake",
+    riskLevel: "low",
+    clinicalNotes: "",
+  })
   const [firebaseUidInput, setFirebaseUidInput] = useState("")
   const [linkError, setLinkError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!patient) return
+    setEditForm({
+      firstName: patient.firstName || "",
+      lastName: patient.lastName || "",
+      email: patient.email || "",
+      phone: patient.phone || patient.phoneNumber || "",
+      status: patient.status || "pending_intake",
+      riskLevel: patient.riskLevel || "low",
+      clinicalNotes: patient.clinicalNotes || "",
+    })
+  }, [patient])
+
+  async function handleUpdatePatient(event: React.FormEvent) {
+    event.preventDefault()
+    setEditError(null)
+    if (!editForm.firstName.trim() || !editForm.lastName.trim() || !editForm.email.trim()) {
+      setEditError("First name, last name, and email are required.")
+      return
+    }
+    try {
+      await updatePatient({
+        patientId,
+        ...editForm,
+        firstName: editForm.firstName.trim(),
+        lastName: editForm.lastName.trim(),
+        email: editForm.email.trim(),
+        phone: editForm.phone.trim(),
+        clinicalNotes: editForm.clinicalNotes.trim(),
+      })
+      invalidateQueryCache("patients")
+      invalidateQueryCache("patient", [patientId])
+      await refetchPatient()
+      setIsEditOpen(false)
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : "Failed to update patient.")
+    }
+  }
 
   const handleRemovePatient = async () => {
     if (
@@ -210,42 +264,6 @@ function PatientDetailContent() {
       apt.portalPatientId === patientId ||
       apt.patientId === patient?.firebaseUid,
   )
-
-  /*
-   * The profile status is based on the latest appointment,
-   * not patient.status.
-   *
-   * This means:
-   * pending     -> Pending
-   * confirmed   -> Confirmed
-   * completed   -> Completed
-   * cancelled   -> Cancelled
-   * rescheduled -> Rescheduled
-   * no_show     -> No Show
-   */
-  const latestAppointment = [...patientAppointments].sort(
-    (a: any, b: any) => {
-      const dateA = new Date(
-        a.scheduledAt ||
-          a.startTime ||
-          a.date ||
-          a.createdAt ||
-          0,
-      ).getTime()
-
-      const dateB = new Date(
-        b.scheduledAt ||
-          b.startTime ||
-          b.date ||
-          b.createdAt ||
-          0,
-      ).getTime()
-
-      return dateB - dateA
-    },
-  )[0]
-
-  const bookingStatus = latestAppointment?.status || "pending"
 
   const handleCreateMoodEntry = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -355,7 +373,7 @@ function PatientDetailContent() {
         patientLoading
           ? "Loading patient information..."
           : `${getPatientStatusLabel(
-              bookingStatus,
+              patient?.status,
             )} · Member since ${
               patient?.createdAt
                 ? new Date(
@@ -426,10 +444,10 @@ function PatientDetailContent() {
                       {patient.email}
                     </div>
 
-                    {patient.phoneNumber && (
+                    {(patient.phone || patient.phoneNumber) && (
                       <div className="flex items-center gap-2">
                         <Phone className="h-4 w-4" />
-                        {patient.phoneNumber}
+                        {patient.phone || patient.phoneNumber}
                       </div>
                     )}
 
@@ -447,6 +465,30 @@ function PatientDetailContent() {
               </div>
 
               <div className="flex gap-2">
+                <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
+                  <DialogTrigger render={<Button variant="outline"><Pencil className="size-4" />Edit</Button>} />
+                  <DialogContent className="max-h-[90vh] overflow-y-auto">
+                    <DialogHeader>
+                      <DialogTitle>Edit Patient</DialogTitle>
+                      <DialogDescription>Update contact and clinical status information.</DialogDescription>
+                    </DialogHeader>
+                    <form className="space-y-4" onSubmit={handleUpdatePatient}>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-1.5"><Label htmlFor="edit-first-name">First Name</Label><Input id="edit-first-name" required value={editForm.firstName} onChange={(e) => setEditForm({ ...editForm, firstName: e.target.value })} /></div>
+                        <div className="space-y-1.5"><Label htmlFor="edit-last-name">Last Name</Label><Input id="edit-last-name" required value={editForm.lastName} onChange={(e) => setEditForm({ ...editForm, lastName: e.target.value })} /></div>
+                      </div>
+                      <div className="space-y-1.5"><Label htmlFor="edit-email">Email</Label><Input id="edit-email" type="email" required value={editForm.email} onChange={(e) => setEditForm({ ...editForm, email: e.target.value })} /></div>
+                      <div className="space-y-1.5"><Label htmlFor="edit-phone">Phone</Label><Input id="edit-phone" value={editForm.phone} onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })} /></div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-1.5"><Label htmlFor="edit-status">Status</Label><select id="edit-status" className="h-8 w-full rounded-lg border border-input bg-background px-2.5 text-sm" value={editForm.status} onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}><option value="pending_intake">Pending Intake</option><option value="active">Active</option><option value="inactive">Inactive</option><option value="discharged">Discharged</option></select></div>
+                        <div className="space-y-1.5"><Label htmlFor="edit-risk">Risk Level</Label><select id="edit-risk" className="h-8 w-full rounded-lg border border-input bg-background px-2.5 text-sm" value={editForm.riskLevel} onChange={(e) => setEditForm({ ...editForm, riskLevel: e.target.value })}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="critical">Critical</option></select></div>
+                      </div>
+                      <div className="space-y-1.5"><Label htmlFor="edit-clinical-notes">Profile Notes</Label><Textarea id="edit-clinical-notes" value={editForm.clinicalNotes} onChange={(e) => setEditForm({ ...editForm, clinicalNotes: e.target.value })} /></div>
+                      {editError ? <p className="text-sm text-destructive">{editError}</p> : null}
+                      <div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={() => setIsEditOpen(false)}>Cancel</Button><Button type="submit" disabled={updatingPatient}>{updatingPatient ? "Saving..." : "Save patient"}</Button></div>
+                    </form>
+                  </DialogContent>
+                </Dialog>
                 <Link href="/appointments">
                   <Button>Schedule</Button>
                 </Link>
@@ -507,7 +549,7 @@ function PatientDetailContent() {
                   <CardContent>
                     <p className="text-2xl font-semibold">
                       {getPatientStatusLabel(
-                        bookingStatus,
+                        patient.status,
                       )}
                     </p>
                   </CardContent>
@@ -554,7 +596,7 @@ function PatientDetailContent() {
 
                 <CardContent>
                   <p className="text-muted-foreground">
-                    {patient.notes ||
+                    {patient.clinicalNotes ||
                       "No additional notes on file"}
                   </p>
                 </CardContent>
@@ -1453,7 +1495,7 @@ function PatientDetailContent() {
 
 export default function PatientDetailPage() {
   return (
-    <ProtectedRoute>
+    <ProtectedRoute allowedRoles={["therapist"]} requireVerified>
       <PatientDetailContent />
     </ProtectedRoute>
   )

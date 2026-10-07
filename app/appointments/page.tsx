@@ -597,13 +597,17 @@ function AppointmentActionsDialog({
   const [showConfirmCancel, setShowConfirmCancel] = useState(false)
   const [rescheduleDate, setRescheduleDate] = useState("")
   const [rescheduleDuration, setRescheduleDuration] = useState(60)
+  const [appointmentNotes, setAppointmentNotes] = useState("")
   const [rescheduleError, setRescheduleError] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!appointment) return
     setRescheduleDate(toDatetimeLocalValue(appointment.scheduledAt))
     setRescheduleDuration(appointment.duration || 60)
+    setAppointmentNotes(appointment.notes || "")
     setRescheduleError(null)
+    setActionError(null)
   }, [appointment])
 
   if (!appointment) return null
@@ -615,22 +619,26 @@ function AppointmentActionsDialog({
   const cancellingLabel = isMobileRequest ? "Declining…" : "Cancelling…"
 
   const handleConfirm = async () => {
+    setActionError(null)
     try {
       await confirmApt(appointment.id || "")
       await onActionComplete()
       onOpenChange(false)
     } catch (err) {
       console.error("Failed to confirm appointment:", err)
+      setActionError(err instanceof Error ? err.message : "Failed to confirm appointment.")
     }
   }
 
   const handleCancel = async () => {
+    setActionError(null)
     try {
       await cancelApt(appointment.id || "")
       await onActionComplete()
       onOpenChange(false)
     } catch (err) {
       console.error("Failed to cancel appointment:", err)
+      setActionError(err instanceof Error ? err.message : "Failed to cancel appointment.")
     }
   }
 
@@ -646,6 +654,7 @@ function AppointmentActionsDialog({
         appointmentId: appointment.id || "",
         scheduledAt: new Date(rescheduleDate).toISOString(),
         duration: rescheduleDuration,
+        notes: appointmentNotes.trim(),
       })
       await onActionComplete()
       onOpenChange(false)
@@ -740,6 +749,7 @@ function AppointmentActionsDialog({
               View patient profile
             </Link>
           )}
+          {actionError ? <p className="rounded-md bg-destructive/10 p-2 text-sm text-destructive">{actionError}</p> : null}
           {isCompleted && (
             <Alert>
               <CheckCircle className="size-4 text-green-600" />
@@ -797,6 +807,15 @@ function AppointmentActionsDialog({
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="appointment-notes">Appointment notes</Label>
+                <Textarea
+                  id="appointment-notes"
+                  value={appointmentNotes}
+                  onChange={(event) => setAppointmentNotes(event.target.value)}
+                  placeholder="Add scheduling or session preparation notes..."
+                />
               </div>
               {rescheduleError ? (
                 <p className="text-xs text-destructive">{rescheduleError}</p>

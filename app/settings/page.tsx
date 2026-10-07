@@ -1,6 +1,11 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { FormEvent, useEffect, useState } from "react"
+import {
+  EmailAuthProvider,
+  reauthenticateWithCredential,
+  updatePassword,
+} from "firebase/auth"
 import { ProtectedRoute } from "@/app/protected-route"
 import { useAuth } from "@/app/providers"
 import { PortalShell } from "@/components/portal-shell"
@@ -13,7 +18,10 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Smartphone, Laptop, Monitor, ShieldCheck, Loader2 } from "lucide-react"
+import { Laptop, ShieldCheck, Loader2, Upload } from "lucide-react"
+import { useUploadProfilePhoto } from "@/lib/hooks"
+import { getPasswordValidationError } from "@/lib/password-policy"
+import { PasswordRequirements } from "@/components/password-requirements"
 import {
   defaultWeeklyAvailability,
   fromStoredAvailability,
@@ -31,6 +39,15 @@ type ProfileForm = {
   bio: string
 }
 
+const defaultNotificationPreferences = {
+  riskAlerts: true,
+  bookingRequests: true,
+  clinicalSummaries: true,
+  appointmentReminders: true,
+  adminMessages: false,
+  weeklyDigest: false,
+}
+
 export default function SettingsPage() {
   return (
     <ProtectedRoute allowedRoles={["therapist"]} requireVerified>
@@ -45,8 +62,10 @@ function SettingsContent() {
   const [loadingProfile, setLoadingProfile] = useState(true)
   const [savingProfile, setSavingProfile] = useState(false)
   const [savingAvailability, setSavingAvailability] = useState(false)
+  const [savingPreferences, setSavingPreferences] = useState(false)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const [availabilityMessage, setAvailabilityMessage] = useState<string | null>(null)
+  const [preferencesMessage, setPreferencesMessage] = useState<string | null>(null)
   const [profileForm, setProfileForm] = useState<ProfileForm>({
     name: "",
     email: "",
@@ -57,6 +76,14 @@ function SettingsContent() {
     bio: "",
   })
   const [availability, setAvailability] = useState<DayAvailability[]>(defaultWeeklyAvailability())
+  const [notificationPreferences, setNotificationPreferences] = useState(defaultNotificationPreferences)
+  const [currentPassword, setCurrentPassword] = useState("")
+  const [newPassword, setNewPassword] = useState("")
+  const [confirmNewPassword, setConfirmNewPassword] = useState("")
+  const [changingPassword, setChangingPassword] = useState(false)
+  const [securityMessage, setSecurityMessage] = useState<string | null>(null)
+  const [securityError, setSecurityError] = useState<string | null>(null)
+  const { execute: uploadProfilePhoto, loading: uploadingPhoto } = useUploadProfilePhoto()
 
   useEffect(() => {
     let cancelled = false
@@ -99,6 +126,10 @@ function SettingsContent() {
         })
 
         setAvailability(fromStoredAvailability(data.availability))
+        setNotificationPreferences({
+          ...defaultNotificationPreferences,
+          ...(data.notificationPreferences || {}),
+        })
       } catch {
         if (!cancelled) {
           setSaveMessage("Could not load your profile data.")
@@ -157,6 +188,30 @@ function SettingsContent() {
     }
   }
 
+  async function handleProfilePhotoUpload(file: File | undefined) {
+    if (!user || !file) return
+    setSaveMessage(null)
+    try {
+      const upload = await uploadProfilePhoto(file)
+      const profilePhoto = String(upload?.fileUrl || "")
+      if (!profilePhoto) throw new Error("Upload did not return a photo URL")
+      const idToken = await user.getIdToken()
+      const response = await fetch(`${apiBaseUrl}/api/auth/profile`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({ profilePhoto }),
+      })
+      if (!response.ok) throw new Error("Failed to save profile photo")
+      setProfileForm((prev) => ({ ...prev, profilePhoto }))
+      setSaveMessage("Profile photo updated successfully.")
+    } catch (err) {
+      setSaveMessage(err instanceof Error ? err.message : "Failed to update profile photo.")
+    }
+  }
+
   async function handleSaveAvailability() {
     if (!user) return
     setSavingAvailability(true)
@@ -194,6 +249,78 @@ function SettingsContent() {
     )
   }
 
+  async function handleSaveNotificationPreferences() {
+    if (!user) return
+    setSavingPreferences(true)
+    setPreferencesMessage(null)
+    try {
+      const idToken = await user.getIdToken()
+      const response = await fetch(`${apiBaseUrl}/api/auth/profile`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({ notificationPreferences }),
+      })
+      if (!response.ok) throw new Error("Failed to save notification preferences")
+      setPreferencesMessage("Notification preferences saved successfully.")
+    } catch (err) {
+      setPreferencesMessage(err instanceof Error ? err.message : "Failed to save notification preferences.")
+    } finally {
+      setSavingPreferences(false)
+    }
+  }
+
+  async function handleChangePassword(event: FormEvent) {
+    event.preventDefault()
+    setSecurityMessage(null)
+    setSecurityError(null)
+    if (!user?.email) {
+      setSecurityError("No email is associated with this account.")
+      return
+    }
+    if (!currentPassword || !newPassword || !confirmNewPassword) {
+      setSecurityError("Fill in all password fields.")
+      return
+    }
+    if (newPassword !== confirmNewPassword) {
+      setSecurityError("New passwords do not match.")
+      return
+    }
+    const validationError = getPasswordValidationError(newPassword)
+    if (validationError) {
+      setSecurityError(validationError)
+      return
+    }
+    if (currentPassword === newPassword) {
+      setSecurityError("New password must be different from the current password.")
+      return
+    }
+
+    setChangingPassword(true)
+    try {
+      const credential = EmailAuthProvider.credential(user.email, currentPassword)
+      await reauthenticateWithCredential(user, credential)
+      await updatePassword(user, newPassword)
+      setCurrentPassword("")
+      setNewPassword("")
+      setConfirmNewPassword("")
+      setSecurityMessage("Password changed successfully.")
+    } catch (err) {
+      const code = (err as { code?: string }).code
+      setSecurityError(
+        code === "auth/invalid-credential" || code === "auth/wrong-password"
+          ? "The current password is incorrect."
+          : err instanceof Error
+            ? err.message
+            : "Failed to change password.",
+      )
+    } finally {
+      setChangingPassword(false)
+    }
+  }
+
   const avatarName = profileForm.name || user?.displayName || "Therapist"
   const avatarFallback = avatarName
     .split(" ")
@@ -225,8 +352,18 @@ function SettingsContent() {
                   <AvatarFallback>{avatarFallback}</AvatarFallback>
                 </Avatar>
                 <div>
-                  <p className="text-sm font-medium">Profile photo URL</p>
-                  <p className="mt-1 text-xs text-muted-foreground">Paste an image URL to update avatar.</p>
+                  <p className="text-sm font-medium">Profile photo</p>
+                  <label className="mt-1 inline-flex cursor-pointer items-center gap-1 text-xs text-primary">
+                    <Upload className="size-3" />
+                    {uploadingPhoto ? "Uploading..." : "Upload a new image"}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="sr-only"
+                      disabled={uploadingPhoto}
+                      onChange={(event) => void handleProfilePhotoUpload(event.target.files?.[0])}
+                    />
+                  </label>
                 </div>
                 <Badge variant="outline" className="ml-auto border-success/30 bg-success/10 text-success">
                   <ShieldCheck className="size-3" />
@@ -254,8 +391,7 @@ function SettingsContent() {
                     id="email"
                     type="email"
                     value={profileForm.email}
-                    onChange={(e) => setProfileForm((prev) => ({ ...prev, email: e.target.value }))}
-                    disabled={loadingProfile || savingProfile}
+                    disabled
                   />
                 </div>
                 <div className="space-y-1.5">
@@ -282,15 +418,6 @@ function SettingsContent() {
                     id="specializations"
                     value={profileForm.specializations}
                     onChange={(e) => setProfileForm((prev) => ({ ...prev, specializations: e.target.value }))}
-                    disabled={loadingProfile || savingProfile}
-                  />
-                </div>
-                <div className="space-y-1.5 sm:col-span-2">
-                  <Label htmlFor="profilePhoto">Profile Photo URL</Label>
-                  <Input
-                    id="profilePhoto"
-                    value={profileForm.profilePhoto}
-                    onChange={(e) => setProfileForm((prev) => ({ ...prev, profilePhoto: e.target.value }))}
                     disabled={loadingProfile || savingProfile}
                   />
                 </div>
@@ -382,12 +509,18 @@ function SettingsContent() {
               <CardTitle className="text-base">Notification Preferences</CardTitle>
             </CardHeader>
             <CardContent className="space-y-1">
-              <Toggle label="Risk alerts" detail="Get notified immediately for high & critical risk events" on />
-              <Toggle label="New booking requests" detail="Email and in-app notification" on />
-              <Toggle label="Clinical summaries" detail="When AI summaries are ready for review" on />
-              <Toggle label="Appointment reminders" detail="Reminders for upcoming sessions" on />
-              <Toggle label="Admin messages" detail="Platform and verification updates" />
-              <Toggle label="Weekly digest" detail="Summary of your practice metrics" />
+              {preferencesMessage ? <p className="mb-2 rounded-md bg-muted px-3 py-2 text-sm">{preferencesMessage}</p> : null}
+              <Toggle label="Risk alerts" detail="Get notified immediately for high & critical risk events" checked={notificationPreferences.riskAlerts} onChange={(checked) => setNotificationPreferences((prev) => ({ ...prev, riskAlerts: checked }))} />
+              <Toggle label="New booking requests" detail="Email and in-app notification" checked={notificationPreferences.bookingRequests} onChange={(checked) => setNotificationPreferences((prev) => ({ ...prev, bookingRequests: checked }))} />
+              <Toggle label="Clinical summaries" detail="When AI summaries are ready for review" checked={notificationPreferences.clinicalSummaries} onChange={(checked) => setNotificationPreferences((prev) => ({ ...prev, clinicalSummaries: checked }))} />
+              <Toggle label="Appointment reminders" detail="Reminders for upcoming sessions" checked={notificationPreferences.appointmentReminders} onChange={(checked) => setNotificationPreferences((prev) => ({ ...prev, appointmentReminders: checked }))} />
+              <Toggle label="Admin messages" detail="Platform and verification updates" checked={notificationPreferences.adminMessages} onChange={(checked) => setNotificationPreferences((prev) => ({ ...prev, adminMessages: checked }))} />
+              <Toggle label="Weekly digest" detail="Summary of your practice metrics" checked={notificationPreferences.weeklyDigest} onChange={(checked) => setNotificationPreferences((prev) => ({ ...prev, weeklyDigest: checked }))} />
+              <div className="flex justify-end pt-3">
+                <Button onClick={() => void handleSaveNotificationPreferences()} disabled={savingPreferences}>
+                  {savingPreferences ? "Saving..." : "Save preferences"}
+                </Button>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
@@ -397,13 +530,18 @@ function SettingsContent() {
             <CardHeader>
               <CardTitle className="text-base">Change Password</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <Field label="Current Password" value="" type="password" placeholder="••••••••" />
-              <Field label="New Password" value="" type="password" placeholder="••••••••" />
-              <Field label="Confirm New Password" value="" type="password" placeholder="••••••••" />
-              <div className="flex justify-end">
-                <Button>Update password</Button>
-              </div>
+            <CardContent>
+              <form className="space-y-4" onSubmit={handleChangePassword}>
+                {securityMessage ? <p className="rounded-md bg-emerald-100 px-3 py-2 text-sm text-emerald-700">{securityMessage}</p> : null}
+                {securityError ? <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{securityError}</p> : null}
+                <Field label="Current Password" value={currentPassword} onChange={setCurrentPassword} type="password" autoComplete="current-password" />
+                <Field label="New Password" value={newPassword} onChange={setNewPassword} type="password" autoComplete="new-password" />
+                <PasswordRequirements password={newPassword} />
+                <Field label="Confirm New Password" value={confirmNewPassword} onChange={setConfirmNewPassword} type="password" autoComplete="new-password" />
+                <div className="flex justify-end">
+                  <Button type="submit" disabled={changingPassword}>{changingPassword ? "Updating..." : "Update password"}</Button>
+                </div>
+              </form>
             </CardContent>
           </Card>
         </TabsContent>
@@ -415,9 +553,13 @@ function SettingsContent() {
               <p className="text-sm text-muted-foreground">Devices currently signed in to your account</p>
             </CardHeader>
             <CardContent className="space-y-3">
-              <Device icon={Laptop} name="MacBook Pro" location="San Francisco, CA · Current session" current />
-              <Device icon={Smartphone} name="iPhone 15" location="San Francisco, CA · 2 hours ago" />
-              <Device icon={Monitor} name="Clinic Workstation" location="Oakland, CA · Yesterday" />
+              <Device
+                icon={Laptop}
+                name="Current browser session"
+                location={`Last sign-in: ${user?.metadata.lastSignInTime ? new Date(user.metadata.lastSignInTime).toLocaleString() : "Current session"}`}
+                current
+              />
+              <p className="text-xs text-muted-foreground">Firebase does not expose a complete device list. Only the authenticated browser session is shown.</p>
             </CardContent>
           </Card>
         </TabsContent>
@@ -431,28 +573,32 @@ function Field({
   value,
   type = "text",
   placeholder,
+  onChange,
+  autoComplete,
 }: {
   label: string
   value: string
   type?: string
   placeholder?: string
+  onChange: (value: string) => void
+  autoComplete?: string
 }) {
   return (
     <div className="space-y-1.5">
       <Label>{label}</Label>
-      <Input type={type} defaultValue={value} placeholder={placeholder} />
+      <Input type={type} value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} autoComplete={autoComplete} />
     </div>
   )
 }
 
-function Toggle({ label, detail, on }: { label: string; detail: string; on?: boolean }) {
+function Toggle({ label, detail, checked, onChange }: { label: string; detail: string; checked: boolean; onChange: (checked: boolean) => void }) {
   return (
     <div className="flex items-center justify-between border-b border-border py-3 last:border-0">
       <div>
         <p className="text-sm font-medium text-foreground">{label}</p>
         <p className="text-xs text-muted-foreground">{detail}</p>
       </div>
-      <Switch defaultChecked={on} />
+      <Switch checked={checked} onCheckedChange={(value) => onChange(Boolean(value))} />
     </div>
   )
 }
@@ -481,11 +627,7 @@ function Device({
         <Badge variant="outline" className="border-success/30 bg-success/10 text-success">
           Active
         </Badge>
-      ) : (
-        <Button variant="ghost" size="sm" className="text-destructive">
-          Sign out
-        </Button>
-      )}
+      ) : null}
     </div>
   )
 }

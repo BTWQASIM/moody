@@ -1,13 +1,14 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
+import { useRouter } from "next/navigation"
 import { ProtectedRoute } from "@/app/protected-route"
 import { useAuth } from "@/app/providers"
 import { PortalShell } from "@/components/portal-shell"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { useNotifications } from "@/lib/hooks"
+import { useMarkAllNotificationsRead, useNotifications } from "@/lib/hooks"
 import {
   CalendarPlus,
   AlertTriangle,
@@ -27,6 +28,7 @@ interface NotificationRow {
   message: string
   createdAt?: string
   isRead?: boolean
+  relatedId?: string
 }
 
 const config: Record<Category, { icon: LucideIcon; accent: string; label: string }> = {
@@ -56,12 +58,15 @@ export default function NotificationsPage() {
 
 function NotificationsContent() {
   const { role } = useAuth()
+  const router = useRouter()
   const {
     data: notifications,
     loading,
     error,
   } = useNotifications()
   const [items, setItems] = useState<NotificationRow[]>([])
+  const { execute: markAllRead, loading: markingRead, error: markReadError } =
+    useMarkAllNotificationsRead()
 
   useEffect(() => {
     setItems((notifications as NotificationRow[]) || [])
@@ -72,20 +77,33 @@ function NotificationsContent() {
     [items],
   )
 
+  async function handleMarkAllRead() {
+    try {
+      await markAllRead(undefined)
+      setItems((prev) => prev.map((item) => ({ ...item, isRead: true })))
+    } catch {
+      // The mutation exposes the backend error in the page.
+    }
+  }
+
   return (
     <PortalShell title="Notifications" subtitle={`${unreadCount} unread updates`}>
-      <div className="mb-4 flex justify-end">
-        <Button
-          variant="outline"
-          onClick={() => setItems((prev) => prev.map((i) => ({ ...i, isRead: true })))}
-        >
-          <Check className="size-4" />
-          Mark all as read
-        </Button>
-      </div>
+      {role !== "admin" ? (
+        <div className="mb-4 flex justify-end">
+          <Button
+            variant="outline"
+            onClick={() => void handleMarkAllRead()}
+            disabled={markingRead || unreadCount === 0}
+          >
+            <Check className="size-4" />
+            {markingRead ? "Saving..." : "Mark all as read"}
+          </Button>
+        </div>
+      ) : null}
       <Card>
         <CardContent className="divide-y divide-border p-0">
           {error ? <div className="p-4 text-sm text-destructive">{error.message}</div> : null}
+          {markReadError ? <div className="p-4 text-sm text-destructive">{markReadError.message}</div> : null}
           {loading ? <div className="p-4 text-sm text-muted-foreground">Loading notifications...</div> : null}
 
           {!loading && !items.length ? (
@@ -104,8 +122,14 @@ function NotificationsContent() {
             return (
               <div
                 key={n.id}
+                role={role === "admin" ? "button" : undefined}
+                tabIndex={role === "admin" ? 0 : undefined}
+                onClick={() => {
+                  if (role === "admin") router.push("/admin/therapists")
+                }}
                 className={cn(
                   "flex items-start gap-3 p-4 transition-colors hover:bg-accent/30",
+                  role === "admin" && "cursor-pointer",
                   !n.isRead && "bg-primary/[0.03]",
                 )}
               >

@@ -15,6 +15,7 @@ from app.tasks import (
     extract_action_items,
     generate_progress_report,
 )
+from app.api.security import require_verified_therapist
 
 router = APIRouter(prefix="/api/ai", tags=["AI"])
 db = FirestoreDAO()
@@ -47,7 +48,10 @@ def verify_token(authorization: str = Header(...)):
             )
         token = authorization.split(" ")[1]
         decoded = firebase_auth.verify_id_token(token)
+        require_verified_therapist(decoded)
         return decoded
+    except HTTPException:
+        raise
     except Exception as err:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

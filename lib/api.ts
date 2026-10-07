@@ -213,6 +213,8 @@ export const serviceAPI = {
     description: string;
     duration: number;
     price: number;
+    specialization?: string;
+    deliveryMode?: string;
   }) {
     return apiCall("/api/services/", "POST", data);
   },
@@ -293,6 +295,10 @@ export const alertsAPI = {
 export const notificationsAPI = {
   async list() {
     return apiCall("/api/notifications/");
+  },
+
+  async markAllRead() {
+    return apiCall("/api/notifications/read-all", "PATCH");
   },
 };
 

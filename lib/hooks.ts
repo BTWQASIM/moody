@@ -94,38 +94,22 @@ function storeQueryResult(key: string, data: unknown) {
 export function invalidateQueryCache(
   queryKey: string,
   dependencies?: unknown[]
-) 
-{
+) {
+  const keysToRefresh: string[] = []
+
   if (dependencies) {
-    const cacheKey = buildQueryCacheKey(queryKey, dependencies)
+    const cacheKey = getQueryCacheKey(queryKey, dependencies)
+    if (!cacheKey) return
     queryCache.delete(cacheKey)
-
-    // Immediately refresh the mounted query if it has a background poller.
-    const poller = queryPollers.get(cacheKey)
-    if (poller) {
-      void runSharedQuery(cacheKey, poller.queryFn, true)
-    }
-
-    return
-  }
-
-  // No dependencies means invalidate every cached query for this query type.
-  for (const cacheKey of Array.from(queryCache.keys())) {
-    if (!cacheKey.includes(`:${queryKey}:`)) {
-      continue
-    }
-
-    queryCache.delete(cacheKey)
-
-    // Immediately refresh any mounted instance of this query.
-    const poller = queryPollers.get(cacheKey)
-    if (poller) {
-      void runSharedQuery(cacheKey, poller.queryFn, true)
+    keysToRefresh.push(cacheKey)
+  } else {
+    // No dependencies means invalidate every cached query for this query type.
+    for (const cacheKey of Array.from(queryCache.keys())) {
+      if (!cacheKey.includes(`:${queryKey}:`)) continue
+      queryCache.delete(cacheKey)
+      keysToRefresh.push(cacheKey)
     }
   }
-
-
-
 
   // Immediately refresh mounted queries instead of waiting
   // for the next background polling interval.
@@ -420,7 +404,7 @@ function useQuery<T>(
  * Hook for listing all patients
  */
 export function usePatients(refreshKey = 0) {
-  return useQuery(
+  return useQuery<any[]>(
     "patients",
     () => patientAPI.list().then((res) => res.patients || []),
     [refreshKey]
@@ -431,7 +415,7 @@ export function usePatients(refreshKey = 0) {
  * Hook for getting a specific patient
  */
 export function usePatient(patientId: string | null) {
-  return useQuery(
+  return useQuery<any | null>(
     "patient",
     () =>
       patientId
@@ -449,7 +433,7 @@ export function useAppointments(filters?: {
   startDate?: string;
   endDate?: string;
 }) {
-  return useQuery(
+  return useQuery<any[]>(
     "appointments",
     () =>
       appointmentAPI
@@ -463,7 +447,7 @@ export function useAppointments(filters?: {
  * Hook for getting a specific appointment
  */
 export function useAppointment(appointmentId: string | null) {
-  return useQuery(
+  return useQuery<any>(
     "appointment",
     () =>
       appointmentId
@@ -477,7 +461,7 @@ export function useAppointment(appointmentId: string | null) {
  * Hook for listing services
  */
 export function useServices() {
-  return useQuery("services", () =>
+  return useQuery<any[]>("services", () =>
     serviceAPI.list().then((res) => res.services || [])
   );
 }
@@ -491,7 +475,13 @@ export function usePatientMobileActivity(
   limit = 30,
   refreshKey = 0
 ) {
-  return useQuery(
+  return useQuery<{
+    linked: boolean
+    firebaseUid?: string
+    mobileUserFound?: boolean
+    moodCheckins: any[]
+    journalEntries: any[]
+  }>(
     "patient-mobile-activity",
     () =>
       patientId
@@ -511,7 +501,7 @@ export function usePatientMobileActivity(
  * Hook for listing mood entries
  */
 export function useMoodEntries(patientId: string | null) {
-  return useQuery(
+  return useQuery<any[]>(
     "mood-entries",
     () =>
       patientId
@@ -525,7 +515,7 @@ export function useMoodEntries(patientId: string | null) {
  * Hook for listing clinical notes
  */
 export function useClinicalNotes(patientId: string | null) {
-  return useQuery(
+  return useQuery<any[]>(
     "clinical-notes",
     () =>
       patientId
@@ -539,7 +529,7 @@ export function useClinicalNotes(patientId: string | null) {
  * Hook for listing risk alerts
  */
 export function useRiskAlerts() {
-  return useQuery("risk-alerts", () =>
+  return useQuery<any[]>("risk-alerts", () =>
     alertsAPI.list().then((res) => res.alerts || [])
   );
 }
@@ -548,7 +538,7 @@ export function useRiskAlerts() {
  * Hook for notifications
  */
 export function useNotifications() {
-  return useQuery("notifications", () =>
+  return useQuery<any[]>("notifications", () =>
     notificationsAPI.list().then((res) => res.notifications || [])
   );
 }
@@ -733,6 +723,22 @@ export function useCreateRiskAlert() {
   return useMutation((data) =>
     alertsAPI.create(data).then((res) => res)
   );
+}
+
+export function useAcknowledgeRiskAlert() {
+  return useMutation(async (alertId: string) => {
+    const result = await alertsAPI.acknowledge(alertId)
+    invalidateQueryCache("risk-alerts")
+    return result
+  })
+}
+
+export function useMarkAllNotificationsRead() {
+  return useMutation(async () => {
+    const result = await notificationsAPI.markAllRead()
+    invalidateQueryCache("notifications")
+    return result
+  })
 }
 
 /**

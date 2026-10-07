@@ -40,9 +40,9 @@ export default function ReportsPage() {
 }
 
 function ReportsPageContent() {
-  const { data: patients } = usePatients()
-  const { data: appointments } = useAppointments()
-  const { data: alerts } = useRiskAlerts()
+  const { data: patients, loading: patientsLoading, error: patientsError } = usePatients()
+  const { data: appointments, loading: appointmentsLoading, error: appointmentsError } = useAppointments()
+  const { data: alerts, loading: alertsLoading, error: alertsError } = useRiskAlerts()
 
   const retentionData = useMemo(() => {
     const now = new Date()
@@ -62,7 +62,7 @@ function ReportsPageContent() {
     const monthIndex = new Map(months.map((m, idx) => [m.key, idx]))
     const servedSets = months.map(() => new Set<string>())
 
-    for (const appt of (appointments || []) as any[]) {
+    for (const appt of ((appointments || []) as any[]).filter((item) => item.status === "completed")) {
       const scheduledAt = appt?.scheduledAt ? new Date(appt.scheduledAt) : null
       if (!scheduledAt || Number.isNaN(scheduledAt.getTime())) continue
       const key = `${scheduledAt.getFullYear()}-${String(scheduledAt.getMonth() + 1).padStart(2, "0")}`
@@ -83,10 +83,11 @@ function ReportsPageContent() {
   }, [appointments])
 
   const totalPatients = (patients || []).length
-  const totalSessions = (appointments || []).length
+  const completedAppointments = ((appointments || []) as any[]).filter((appointment) => appointment.status === "completed")
+  const totalSessions = completedAppointments.length
   const totalAlerts = (alerts || []).length
   const criticalAlerts = ((alerts || []) as any[]).filter((a) => a.riskLevel === "critical").length
-  const activePatients = new Set(((appointments || []) as any[]).map((a) => a.patientId).filter(Boolean)).size
+  const activePatients = ((patients || []) as any[]).filter((patient) => patient.status === "active").length
 
   const metrics: { label: string; value: string; sub: string; icon: LucideIcon; accent: string }[] = [
     {
@@ -104,9 +105,9 @@ function ReportsPageContent() {
       accent: "text-success bg-success/10",
     },
     {
-      label: "Risk Alerts Generated",
+      label: "Active Risk Alerts",
       value: String(totalAlerts),
-      sub: `${criticalAlerts} critical escalations`,
+      sub: `${criticalAlerts} critical alerts requiring review`,
       icon: AlertTriangle,
       accent: "text-destructive bg-destructive/10",
     },
@@ -131,6 +132,12 @@ function ReportsPageContent() {
 
   return (
     <PortalShell title="Reports & Analytics" subtitle="Track your clinical outcomes and practice performance">
+      {patientsLoading || appointmentsLoading || alertsLoading ? (
+        <Card className="mb-4 p-4 text-sm text-muted-foreground">Loading report data...</Card>
+      ) : null}
+      {patientsError || appointmentsError || alertsError ? (
+        <Card className="mb-4 p-4 text-sm text-destructive">Some report data could not be loaded. Refresh the page before relying on these totals.</Card>
+      ) : null}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {metrics.map((m) => {
           const Icon = m.icon

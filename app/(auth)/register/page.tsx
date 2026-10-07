@@ -19,7 +19,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
-import { createUserWithEmailAndPassword, signOut } from "firebase/auth"
+import { createUserWithEmailAndPassword, deleteUser, signOut, type User as FirebaseUser } from "firebase/auth"
 import { auth } from "@/lib/firebase"
 import {
   defaultWeeklyAvailability,
@@ -167,6 +167,8 @@ export default function RegisterPage() {
     }
 
     setLoading(true)
+    let createdUser: FirebaseUser | null = null
+    let profileSaved = false
 
     try {
       const userCred = await createUserWithEmailAndPassword(
@@ -174,6 +176,7 @@ export default function RegisterPage() {
         formData.email,
         formData.password,
       )
+      createdUser = userCred.user
 
       const idToken = await userCred.user.getIdToken()
       const { profilePhoto, documentUrls } = await uploadRegistrationFiles(idToken)
@@ -212,9 +215,13 @@ export default function RegisterPage() {
         throw new Error(errData.detail || "Failed to save therapist profile")
       }
 
+      profileSaved = true
       await signOut(auth)
       setStep(4)
     } catch (err: unknown) {
+      if (createdUser && !profileSaved) {
+        await deleteUser(createdUser).catch(() => undefined)
+      }
       const firebaseErr = err as { code?: string; message?: string }
       let message = firebaseErr.message || "Failed to create account"
 
@@ -440,6 +447,10 @@ export default function RegisterPage() {
           key="register-step-2"
           onSubmit={(e) => {
             e.preventDefault()
+            if (documentFiles.length === 0) {
+              setError("Upload at least one licence or certification document before continuing.")
+              return
+            }
             const form = new FormData(e.currentTarget)
             setCredentialData({
               qualifications: form.get("qual") as string,

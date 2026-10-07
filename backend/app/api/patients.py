@@ -11,6 +11,7 @@ from datetime import datetime
 from app.models import PatientProfile, PatientContactInfo, PatientStatus, RiskLevel
 from app.db import FirestoreDAO
 from app.firebase import get_auth_client, get_db_client
+from app.api.security import require_verified_therapist
 
 router = APIRouter(prefix="/api/patients", tags=["patients"])
 db = FirestoreDAO()
@@ -68,6 +69,7 @@ def verify_token(authorization: str = Header(...)):
             )
         token = authorization.split(" ")[1]
         decoded = firebase_auth.verify_id_token(token)
+        require_verified_therapist(decoded)
         return decoded
     except HTTPException:
         raise

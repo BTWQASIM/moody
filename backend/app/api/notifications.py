@@ -10,6 +10,7 @@ from app.firebase import get_db_client
 
 from app.models import Notification
 from app.db import FirestoreDAO
+from app.api.security import require_portal_user
 
 router = APIRouter(prefix="/api/notifications", tags=["notifications"])
 db = FirestoreDAO()
@@ -29,7 +30,10 @@ def verify_token(authorization: str = Header(...)):
             )
         token = authorization.split(" ")[1]
         decoded = firebase_auth.verify_id_token(token)
+        require_portal_user(decoded)
         return decoded
+    except HTTPException:
+        raise
     except Exception as err:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -117,4 +121,35 @@ async def get_notifications(authorization: str = Header(...)):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to fetch notifications: {str(err)}",
+        )
+
+
+@router.patch("/read-all")
+async def mark_all_notifications_read(authorization: str = Header(...)):
+    """Persist read state for the authenticated user's stored notifications."""
+    decoded = verify_token(authorization)
+    user_id = decoded.get("uid")
+    db_client = get_db_client()
+
+    if decoded.get("role") == "admin" or (
+        db_client
+        and db_client.collection("admins").document(user_id).get().exists
+    ):
+        return {
+            "status": "success",
+            "updated": 0,
+            "message": "Admin verification requests remain active until reviewed",
+        }
+
+    try:
+        updated = db.mark_notifications_read(user_id)
+        return {
+            "status": "success",
+            "updated": updated,
+            "message": "Notifications marked as read",
+        }
+    except Exception as err:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update notifications: {str(err)}",
         )

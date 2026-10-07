@@ -3,8 +3,8 @@
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
-import { useRiskAlerts } from "@/lib/hooks"
-import { AlertTriangle, AlertCircle, Info, ArrowRight } from "lucide-react"
+import { useAcknowledgeRiskAlert, useRiskAlerts } from "@/lib/hooks"
+import { AlertTriangle, AlertCircle, Info, ArrowRight, Check } from "lucide-react"
 import { cn } from "@/lib/utils"
 import Link from "next/link"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -38,6 +38,7 @@ const severityConfig = {
 
 export function EarlyWarningAlerts() {
   const { data: alerts, loading, error } = useRiskAlerts()
+  const { execute: acknowledge, loading: acknowledging, error: acknowledgeError } = useAcknowledgeRiskAlert()
 
   const LoadingSkeleton = () => (
     <div className="space-y-3">
@@ -56,6 +57,7 @@ export function EarlyWarningAlerts() {
         </p>
       </CardHeader>
       <CardContent className="space-y-3">
+        {acknowledgeError ? <p className="text-sm text-destructive">{acknowledgeError.message}</p> : null}
         {loading ? (
           <LoadingSkeleton />
         ) : error ? (
@@ -137,16 +139,28 @@ export function EarlyWarningAlerts() {
                             ? "Acknowledged"
                             : "Pending"}
                         </p>
-                        <Link href={`/patients/${alert.patientId}`}>
+                        <div className="flex items-center gap-1">
                           <Button
                             size="sm"
-                            variant="ghost"
+                            variant="outline"
                             className="h-7 gap-1 text-xs"
+                            disabled={acknowledging}
+                            onClick={() => void acknowledge(alert.id).catch(() => undefined)}
                           >
-                            Review
-                            <ArrowRight className="size-3.5" />
+                            <Check className="size-3.5" />
+                            Acknowledge
                           </Button>
-                        </Link>
+                          <Link href={`/patients/${alert.patientId}`}>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 gap-1 text-xs"
+                            >
+                              Review
+                              <ArrowRight className="size-3.5" />
+                            </Button>
+                          </Link>
+                        </div>
                       </div>
                     </div>
                   </div>

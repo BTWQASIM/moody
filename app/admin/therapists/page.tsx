@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 
 type Therapist = {
   uid: string
@@ -21,6 +22,10 @@ type Therapist = {
   yearsOfExperience?: number
   status?: string
   verified?: boolean
+  profilePhoto?: string
+  bio?: string
+  specializations?: string[]
+  documentUrls?: string[]
 }
 
 type EditState = {
@@ -128,7 +133,7 @@ function TherapistAccessContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user])
 
-  async function updateAccess(uid: string, verified: boolean) {
+  async function updateAccess(uid: string, verified: boolean, accessStatus?: string) {
     if (!user) return
 
     setSavingUid(uid)
@@ -146,7 +151,7 @@ function TherapistAccessContent() {
         },
         body: JSON.stringify({
           verified,
-          status: verified ? "verified" : "suspended",
+          status: accessStatus || (verified ? "verified" : "suspended"),
         }),
       })
 
@@ -155,7 +160,13 @@ function TherapistAccessContent() {
         throw new Error(payload.detail || "Failed to update therapist access")
       }
 
-      setSuccess(verified ? "Therapist verified successfully" : "Therapist access revoked")
+      setSuccess(
+        verified
+          ? "Therapist verified successfully"
+          : accessStatus === "rejected"
+            ? "Therapist application rejected"
+            : "Therapist access revoked",
+      )
       await loadTherapists()
     } catch (err: any) {
       setError(err.message || "Failed to update therapist access")
@@ -263,15 +274,21 @@ function TherapistAccessContent() {
               return (
                 <Card key={therapist.uid}>
                   <CardHeader className="flex flex-row items-start justify-between gap-4">
-                    <div>
-                      <CardTitle className="text-base">{therapist.name || "Unnamed Therapist"}</CardTitle>
-                      <p className="text-sm text-muted-foreground">{therapist.email || therapist.uid}</p>
+                    <div className="flex items-center gap-3">
+                      <Avatar className="size-11">
+                        <AvatarImage src={therapist.profilePhoto || "/placeholder.svg"} alt={therapist.name || "Therapist"} />
+                        <AvatarFallback>{therapist.name?.charAt(0) || "T"}</AvatarFallback>
+                      </Avatar>
+                      <div>
+                        <CardTitle className="text-base">{therapist.name || "Unnamed Therapist"}</CardTitle>
+                        <p className="text-sm text-muted-foreground">{therapist.email || therapist.uid}</p>
+                      </div>
                     </div>
                     <Badge
                       variant="outline"
                       className={therapist.verified ? "border-emerald-300 text-emerald-700" : "border-amber-300 text-amber-700"}
                     >
-                      {therapist.verified ? "Verified" : "Pending"}
+                      {therapist.verified ? "Verified" : (therapist.status || "Pending").replaceAll("_", " ")}
                     </Badge>
                   </CardHeader>
                   <CardContent className="space-y-4">
@@ -316,20 +333,38 @@ function TherapistAccessContent() {
                       />
                     </div>
 
+                    {therapist.bio ? <div><p className="text-sm font-medium">Professional Bio</p><p className="text-sm text-muted-foreground">{therapist.bio}</p></div> : null}
+                    {therapist.specializations?.length ? <div><p className="text-sm font-medium">Specializations</p><div className="mt-1 flex flex-wrap gap-1">{therapist.specializations.map((item) => <Badge key={item} variant="outline">{item}</Badge>)}</div></div> : null}
+                    <div>
+                      <p className="text-sm font-medium">Credential Documents</p>
+                      {therapist.documentUrls?.length ? (
+                        <div className="mt-1 flex flex-wrap gap-2">{therapist.documentUrls.map((url, index) => <a key={url} href={url} target="_blank" rel="noreferrer" className="text-sm text-primary underline">Document {index + 1}</a>)}</div>
+                      ) : <p className="text-sm text-destructive">No credential documents uploaded</p>}
+                    </div>
+
                     <div className="flex flex-wrap gap-2">
                       <Button
-                        onClick={() => updateAccess(therapist.uid, true)}
+                        onClick={() => updateAccess(therapist.uid, true, "verified")}
                         disabled={savingUid === therapist.uid || therapist.verified}
                       >
                         Verify & Grant Access
                       </Button>
                       <Button
                         variant="destructive"
-                        onClick={() => updateAccess(therapist.uid, false)}
+                        onClick={() => updateAccess(therapist.uid, false, "suspended")}
                         disabled={savingUid === therapist.uid || !therapist.verified}
                       >
                         Revoke Access
                       </Button>
+                      {!therapist.verified && !["rejected", "suspended"].includes(String(therapist.status || "").toLowerCase()) ? (
+                        <Button
+                          variant="destructive"
+                          onClick={() => updateAccess(therapist.uid, false, "rejected")}
+                          disabled={savingUid === therapist.uid}
+                        >
+                          Reject Application
+                        </Button>
+                      ) : null}
                       <Button
                         variant="outline"
                         onClick={() => saveCredentials(therapist.uid)}

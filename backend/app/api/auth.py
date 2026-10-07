@@ -104,6 +104,7 @@ class UpdateProfileRequest(BaseModel):
     specializations: Optional[List[str]] = None
     profilePhoto: Optional[str] = None
     availability: Optional[List[Dict[str, Any]]] = None
+    notificationPreferences: Optional[Dict[str, bool]] = None
 
 
 class UpdateTherapistAccessRequest(BaseModel):
@@ -224,17 +225,23 @@ async def set_custom_claims(request: SetClaimsRequest, authorization: str = Head
                 detail="Firebase admin credentials not configured",
             )
 
-        if decoded.get("uid") != request.uid and not _is_admin(decoded, db_client):
+        is_admin = _is_admin(decoded, db_client)
+        if decoded.get("uid") != request.uid and not is_admin:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You can only update your own account claims",
             )
 
-        if request.role == "admin" and not _is_admin(decoded, db_client):
+        if request.role == "admin" and not is_admin:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only admins can assign admin role",
             )
+
+        if not is_admin:
+            request.role = "therapist"
+            request.verified = False
+            request.status = "pending_verification"
 
         merged_claims = _set_claims_preserving_existing(
             auth_client,
@@ -298,6 +305,8 @@ async def set_custom_claims(request: SetClaimsRequest, authorization: str = Head
             "claims": merged_claims,
         }
 
+    except HTTPException:
+        raise
     except firebase_auth.UserNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -402,6 +411,8 @@ async def bootstrap_admin(
             "email": user_record.email,
             "claims": claims,
         }
+    except HTTPException:
+        raise
     except firebase_auth.UserNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -449,6 +460,8 @@ async def verify_therapist(uid: str, authorization: str = Header(...)):
             "message": f"Therapist {uid} verified",
         }
 
+    except HTTPException:
+        raise
     except Exception as err:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -638,6 +651,8 @@ async def update_therapist_access(
             "status": "success",
             "message": f"Therapist access updated for {uid}",
         }
+    except HTTPException:
+        raise
     except firebase_auth.UserNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -717,6 +732,8 @@ async def update_therapist_credentials(
             "status": "success",
             "message": f"Therapist credentials updated for {uid}",
         }
+    except HTTPException:
+        raise
     except firebase_auth.UserNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

@@ -33,10 +33,11 @@ function DashboardContent() {
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
     const tomorrow = new Date(today)
     tomorrow.setDate(tomorrow.getDate() + 1)
+    const schedulableStatuses = new Set(["pending", "confirmed", "rescheduled"])
 
     const todayAppointments = appointmentList.filter((apt: any) => {
       const aptDate = new Date(apt.scheduledAt)
-      return aptDate >= today && aptDate < tomorrow
+      return aptDate >= today && aptDate < tomorrow && schedulableStatuses.has(apt.status)
     })
 
     const highRiskPatients = patientList.filter(
@@ -54,7 +55,7 @@ function DashboardContent() {
       highRiskCount: highRiskPatients.length,
       todayAppointments: todayAppointments.length,
       upcomingAppointments: appointmentList.filter(
-        (apt: any) => new Date(apt.scheduledAt) > now
+        (apt: any) => new Date(apt.scheduledAt) > now && schedulableStatuses.has(apt.status)
       ).length,
       pendingAppointments: pendingAppointments.length,
       riskAlerts: alertList.filter((a: any) => !a.isAcknowledged).length,

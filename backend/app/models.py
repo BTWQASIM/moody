@@ -167,6 +167,8 @@ class ServiceOffering(BaseModel):
     description: str
     duration: int  # Minutes
     price: float  # USD
+    specialization: Optional[str] = None
+    deliveryMode: Optional[str] = None
     isActive: bool = True
     createdAt: datetime = Field(default_factory=datetime.utcnow)
     updatedAt: datetime = Field(default_factory=datetime.utcnow)
