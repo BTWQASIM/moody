@@ -23,6 +23,17 @@ class AIClientTests(unittest.TestCase):
         client = AIClient()
         with patch.object(client, "_generate_text", return_value="test response"):
             summary = client.summarize_text("notes")
+        valid_report = """**Overall Progress**
+The available records show gradual improvement across the review period.
+**Key Improvements**
+- The patient completed the documented coping exercise consistently.
+**Remaining Focus Areas**
+- Continue monitoring sleep and anxiety patterns between appointments.
+**Treatment Recommendations**
+- Review the recorded trends and continue the existing treatment plan.
+**Goal Timeline**
+- Reassess the documented goals at the next scheduled clinical review."""
+        with patch.object(client, "_generate_text", return_value=valid_report):
             report = client.prepare_progress_report("Patient", 1, ["session"])
         with patch.object(
             client,
@@ -53,6 +64,39 @@ class AIClientTests(unittest.TestCase):
 
         self.assertEqual(parsed[0]["title"], "Review diary")
         self.assertFalse(parsed[0]["forPatient"])
+
+    def test_progress_report_repairs_incomplete_response(self):
+        client = AIClient()
+        valid_report = """**Overall Progress**
+The limited records indicate a stable mood pattern during this period.
+**Key Improvements**
+- The patient completed multiple mood check-ins.
+**Remaining Focus Areas**
+- More journal and clinical-note data is needed for longitudinal conclusions.
+**Treatment Recommendations**
+- Continue structured check-ins and review results with the therapist.
+**Goal Timeline**
+- Reassess after additional records are collected over two weeks."""
+        with patch.object(
+            client,
+            "_generate_text",
+            side_effect=["User Safety: safe", valid_report],
+        ) as generate:
+            report = client.prepare_progress_report("Patient", 3, ["mood data"])
+
+        self.assertEqual(report, valid_report)
+        self.assertEqual(generate.call_count, 2)
+
+    def test_progress_report_rejects_two_incomplete_responses(self):
+        client = AIClient()
+        with patch.object(
+            client,
+            "_generate_text",
+            side_effect=["User Safety: safe", "Still incomplete"],
+        ):
+            report = client.prepare_progress_report("Patient", 3, ["mood data"])
+
+        self.assertIsNone(report)
 
     def test_openrouter_request(self):
         client = AIClient()

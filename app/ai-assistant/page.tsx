@@ -59,6 +59,7 @@ interface Patient {
   id?: string
   firstName?: string
   lastName?: string
+  name?: string
   email?: string
 }
 
@@ -263,6 +264,14 @@ function resolveActionItems(taskResult: any): ActionItem[] {
     (item): item is ActionItem =>
       item && typeof item.title === "string" && typeof item.forPatient === "boolean",
   )
+}
+
+function getPatientDisplayName(patient: Patient) {
+  const fullName = [patient.firstName, patient.lastName]
+    .filter(Boolean)
+    .join(" ")
+    .trim()
+  return fullName || patient.name?.trim() || patient.email?.trim() || "Unnamed patient"
 }
 
 // ============================================================================
@@ -574,6 +583,8 @@ function GenerateProgressReportTab({ patients }: { patients: Patient[] }) {
       ? (taskResult as any).result.progressReport
       : null
   const hasNoData = (taskResult as any)?.result?.status === "no_data"
+  const dataCoverage = ((taskResult as any)?.result?.dataCoverage || {}) as Record<string, number>
+  const dataQuality = (taskResult as any)?.result?.dataQuality as string | undefined
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -590,10 +601,12 @@ function GenerateProgressReportTab({ patients }: { patients: Patient[] }) {
     }
   }
 
-  const patientOptions = patients.map((p) => ({
-    id: p.id,
-    label: `${p.firstName} ${p.lastName}`,
-  }))
+  const patientOptions = patients.flatMap((patient) =>
+    patient.id
+      ? [{ id: patient.id, label: getPatientDisplayName(patient) }]
+      : [],
+  )
+  const selectedPatient = patientOptions.find((option) => option.id === selectedPatientId)
 
   return (
     <div className="space-y-4">
@@ -605,7 +618,9 @@ function GenerateProgressReportTab({ patients }: { patients: Patient[] }) {
             onValueChange={(value) => setSelectedPatientId(value ?? "")}
           >
             <SelectTrigger id="report-patient">
-              <SelectValue placeholder="Choose a patient..." />
+              <span className={cn("flex-1 text-left", !selectedPatient && "text-muted-foreground")}>
+                {selectedPatient?.label || "Choose a patient..."}
+              </span>
             </SelectTrigger>
             <SelectContent>
               {patientOptions.map((opt) => (
@@ -618,8 +633,7 @@ function GenerateProgressReportTab({ patients }: { patients: Patient[] }) {
         </div>
 
         <p className="text-sm text-muted-foreground">
-          AI will analyze all available patient data including mood entries, notes, appointments, and progress to
-          generate a comprehensive progress report.
+          AI will analyze available mood check-ins, journals, clinical notes, generated summaries, and appointments.
         </p>
 
         <Button type="submit" disabled={loading} className="w-full">
@@ -649,6 +663,23 @@ function GenerateProgressReportTab({ patients }: { patients: Patient[] }) {
                 <h3 className="mb-4 border-b pb-3 text-base font-semibold text-foreground">
                   Clinical Progress Report
                 </h3>
+                {Object.keys(dataCoverage).length > 0 && (
+                  <div className="mb-4 flex flex-wrap gap-2">
+                    {Object.entries(dataCoverage).map(([source, count]) => (
+                      <Badge key={source} variant="secondary">
+                        {source.replaceAll("_", " ")}: {count}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+                {dataQuality === "limited" && (
+                  <Alert className="mb-4">
+                    <AlertTriangle className="size-4" />
+                    <AlertDescription>
+                      This report is based on limited source data. Add journal entries or clinical notes for a more detailed longitudinal report.
+                    </AlertDescription>
+                  </Alert>
+                )}
                 <div className="space-y-2 leading-6 text-muted-foreground">
                   {renderClinicalMarkdown(progressReport)}
                 </div>

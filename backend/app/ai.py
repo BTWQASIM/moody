@@ -17,6 +17,13 @@ class AIClient:
 
     _base_url = "https://openrouter.ai/api/v1/chat/completions"
     _model = "openrouter/free"
+    _progress_sections = (
+        "overall progress",
+        "key improvements",
+        "remaining focus areas",
+        "treatment recommendations",
+        "goal timeline",
+    )
 
     def __init__(self) -> None:
         self.enabled = bool(settings.openrouter_api_key)
@@ -151,7 +158,7 @@ Session content:
     ) -> Optional[str]:
         """Generate a progress report from multiple sessions."""
         sessions_text = "\n".join(f"- {session}" for session in key_sessions)
-        prompt = f"""Generate a concise clinical progress report from the supplied records.
+        prompt = f"""Generate a detailed but concise clinical progress report from the supplied records.
 
 Return clean Markdown using exactly these sections:
 **Overall Progress**
@@ -162,6 +169,8 @@ Return clean Markdown using exactly these sections:
 
 Use short paragraphs or bullet points. Do not add a preamble, code fence, unsupported
 diagnosis, or facts that are absent from the records.
+If the records are sparse, still complete every section and explicitly describe the
+data limitation instead of returning a safety classification or one-line response.
 
 Patient: {patient_name}
 Session Count: {session_count}
@@ -169,7 +178,29 @@ Session Count: {session_count}
 Available clinical records:
 {sessions_text}
 """
-        return self._generate_text(prompt)
+        report = self._generate_text(prompt)
+        if self._is_valid_progress_report(report):
+            return report
+
+        repair_prompt = f"""The previous response was incomplete:
+{report or "No response"}
+
+Rewrite the report using all five required Markdown headings exactly as specified.
+Each section must contain at least one evidence-based sentence or bullet. State when
+the available data is insufficient. Do not return only a safety label.
+
+Original request and records:
+{prompt}
+"""
+        repaired = self._generate_text(repair_prompt)
+        return repaired if self._is_valid_progress_report(repaired) else None
+
+    @classmethod
+    def _is_valid_progress_report(cls, report: Optional[str]) -> bool:
+        if not report or len(report.strip()) < 200:
+            return False
+        normalized = report.lower()
+        return all(section in normalized for section in cls._progress_sections)
 
 
 # Backward-compatible alias retained for existing Celery task callers.

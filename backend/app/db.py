@@ -453,9 +453,12 @@ class FirestoreDAO:
             raise ValueError(f"Appointment not found: {appointment_id}")
 
         collection = self.db.collection("clincal_summaries")
+        portal_patient_id = appointment.get("portalPatientId")
+        firebase_patient_id = appointment.get("patientId")
         summary_data = {
             "appointmentID": appointment_id,
-            "patientID": appointment.get("patientId"),
+            "patientID": portal_patient_id or firebase_patient_id,
+            "firebasePatientId": firebase_patient_id,
             "therapistID": appointment.get("therapistUid"),
             "generatedNotes": summary,
             "reviewedAndSigned": False,
@@ -738,40 +741,90 @@ class FirestoreDAO:
     def get_progress_report_sources(
         self, patient_id: str, limit: int = 30
     ) -> Dict[str, List[Dict[str, Any]]]:
-        """Read existing mood, journal, and clinical records for a patient."""
+        """Read mobile and portal clinical records for a patient."""
         if not self.db:
-            return {"mood_checkins": [], "journals": [], "clinical_summaries": []}
+            return {
+                "mood_checkins": [],
+                "journals": [],
+                "clinical_notes": [],
+                "clinical_summaries": [],
+                "appointments": [],
+            }
 
-        firebase_uids: set[str] = set()
         patient = self.get_patient(patient_id)
-        if patient and patient.get("firebaseUid"):
-            firebase_uids.add(str(patient["firebaseUid"]))
+        firebase_uid = str((patient or {}).get("firebaseUid") or "").strip()
+        identifiers = {patient_id}
+        if firebase_uid:
+            identifiers.add(firebase_uid)
 
-        mood_checkins: List[Dict[str, Any]] = []
-        for firebase_uid in firebase_uids:
-            mood_checkins.extend(self.get_mobile_mood_checkins(firebase_uid, limit))
+        def select_fields(
+            rows: List[Dict[str, Any]], fields: tuple[str, ...]
+        ) -> List[Dict[str, Any]]:
+            return [
+                {field: row[field] for field in fields if row.get(field) is not None}
+                for row in rows[:limit]
+            ]
 
-        journals: List[Dict[str, Any]] = []
-        docs = self.db.collection("journals").where(
-            "patientID", "==", patient_id
-        ).stream()
-        journals.extend(self._stream_data(docs))
+        mood_checkins = (
+            self.get_mobile_mood_checkins(firebase_uid, limit)
+            if firebase_uid
+            else []
+        )
+        journals = (
+            self.get_mobile_journal_entries(firebase_uid, limit)
+            if firebase_uid
+            else []
+        )
+        clinical_notes = self.get_notes_for_patient(patient_id)[:limit]
+        appointments = self.get_appointments_for_patient(patient_id)[:limit]
 
-        clinical_docs = self.db.collection("clincal_summaries").where(
-            "patientID", "==", patient_id
-        ).stream()
-        clinical_summaries = self._stream_data(clinical_docs)
+        summaries_by_id: Dict[str, Dict[str, Any]] = {}
+        for identifier in identifiers:
+            for field in ("patientID", "firebasePatientId"):
+                docs = self.db.collection("clincal_summaries").where(
+                    field, "==", identifier
+                ).stream()
+                for doc in docs:
+                    data = cast(Any, doc).to_dict()
+                    if isinstance(data, dict):
+                        summaries_by_id[str(cast(Any, doc).id)] = data
+        clinical_summaries = self._sort_by_datetime_field(
+            list(summaries_by_id.values()), "timestamp", reverse=True
+        )[:limit]
+
+        mood_fields = (
+            "timestamp",
+            "moodScale",
+            "moods",
+            "displayMood",
+            "emotions",
+            "factors",
+            "note",
+            "source",
+        )
+        journal_fields = ("timestamp", "prompt", "entry")
+        note_fields = ("createdAt", "content", "tags", "appointmentId")
+        summary_fields = ("timestamp", "generatedNotes", "reviewedAndSigned")
+        appointment_fields = (
+            "scheduledAt",
+            "type",
+            "status",
+            "duration",
+            "notes",
+            "sessionSummary",
+            "actionItems",
+            "moodBefore",
+            "moodAfter",
+        )
 
         return {
-            "mood_checkins": self._sort_by_datetime_field(
-                mood_checkins, "timestamp", reverse=True
-            )[:limit],
-            "journals": self._sort_by_datetime_field(
-                journals, "timestamp", reverse=True
-            )[:limit],
-            "clinical_summaries": self._sort_by_datetime_field(
-                clinical_summaries, "timestamp", reverse=True
-            )[:limit],
+            "mood_checkins": select_fields(mood_checkins, mood_fields),
+            "journals": select_fields(journals, journal_fields),
+            "clinical_notes": select_fields(clinical_notes, note_fields),
+            "clinical_summaries": select_fields(
+                clinical_summaries, summary_fields
+            ),
+            "appointments": select_fields(appointments, appointment_fields),
         }
 
     def link_patient_firebase_uid(

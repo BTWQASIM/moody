@@ -142,7 +142,24 @@ def generate_progress_report(
         patient = db.get_patient(patient_id) or {}
         patient_name = " ".join(
             part for part in [patient.get("firstName"), patient.get("lastName")] if part
-        ) or patient_id
+        ).strip()
+        patient_name = (
+            patient_name
+            or str(patient.get("name") or "").strip()
+            or str(patient.get("email") or "").strip()
+            or "Patient"
+        )
+        source_counts = {
+            source_name: len(records)
+            for source_name, records in sources.items()
+        }
+        populated_sources = sum(1 for count in source_counts.values() if count > 0)
+        total_records = sum(source_counts.values())
+        data_quality = (
+            "sufficient"
+            if populated_sources >= 2 and total_records >= 5
+            else "limited"
+        )
         key_sessions = [
             {
                 "source": source_name,
@@ -153,7 +170,7 @@ def generate_progress_report(
         ]
         report = gemini_client.prepare_progress_report(
             patient_name,
-            sum(len(records) for records in sources.values()),
+            total_records,
             key_sessions,
         )
 
@@ -172,6 +189,8 @@ def generate_progress_report(
                 "status": "completed",
                 "patientId": patient_id,
                 "progressReport": report,
+                "dataCoverage": source_counts,
+                "dataQuality": data_quality,
             }
         else:
             raise Exception("Report generation returned None")
